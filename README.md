@@ -1,5 +1,9 @@
 # MeroGuru
 
+[![CI](https://github.com/iamgroot400/MeroGuru/actions/workflows/ci.yml/badge.svg)](https://github.com/iamgroot400/MeroGuru/actions/workflows/ci.yml)
+[![License: AGPL v3](https://img.shields.io/badge/License-AGPL%20v3-blue.svg)](LICENSE)
+[![Self-hostable](https://img.shields.io/badge/self--hostable-yes-brightgreen)](docker-compose.yml)
+
 An open-source, self-hosted adaptive learning platform. Tell it what you want to learn,
 how much time you have, and what you already know — it builds a day-by-day plan, finds
 resources, tests your understanding, and reshapes your plan based on how you actually do.
@@ -18,7 +22,7 @@ honest and up to date rather than aspirational.
 Requirements: Docker Desktop (or Docker Engine + Compose) running on your machine.
 
 ```bash
-git clone <this-repo-url>
+git clone https://github.com/iamgroot400/MeroGuru.git
 cd MeroGuru
 cp .env.example .env
 docker compose up --build
