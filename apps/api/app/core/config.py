@@ -10,10 +10,6 @@ class Settings(BaseSettings):
     database_url: str = "postgresql+psycopg://meroguru:change-me@localhost:5432/meroguru"
     redis_url: str = "redis://localhost:6379/0"
 
-    jwt_secret: str = "change-me"
-    access_token_minutes: int = 15
-    refresh_token_days: int = 30
-
     credential_encryption_key: str = "change-me"
 
     ai_provider: str = "ollama"

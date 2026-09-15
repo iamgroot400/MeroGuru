@@ -27,6 +27,22 @@ jobs:
           cd apps/api
           PYTHONPATH="${{ github.workspace }}:${{ github.workspace }}/apps/api" python -m pytest tests/ -v
 
+  brain:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install brain service dependencies
+        run: |
+          cd apps/brain
+          pip install -r requirements-dev.txt
+      - name: Run brain service tests
+        run: |
+          cd apps/brain
+          PYTHONPATH="${{ github.workspace }}:${{ github.workspace }}/apps/brain" python -m pytest tests/ -v
+
   frontend:
     runs-on: ubuntu-latest
     steps:
