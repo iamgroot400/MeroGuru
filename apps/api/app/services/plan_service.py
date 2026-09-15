@@ -122,18 +122,23 @@ async def generate_roadmap_and_plan(db: Session, goal_id: UUID) -> LearningPlan:
                 concept_descriptions=[c.description for c in lesson_concepts],
                 source_excerpt=None,
             ),
-            max_tokens=2500,
+            max_tokens=3500,
         )
         content = await provider.generate_structured(content_request, LESSON_CONTENT_SCHEMA)
 
         seq = 0
         if content.valid:
+            takeaways = content.data.get("key_takeaways") or []
+            takeaways_md = "\n".join(f"- {item}" for item in takeaways)
+            explanation_text = content.data["explanation"]
+            if takeaways_md:
+                explanation_text = f"{explanation_text}\n\n## Key takeaways\n{takeaways_md}"
             db.add(
                 LessonActivity(
                     lesson_id=lesson.id,
                     activity_type="explanation",
                     title="Explanation",
-                    instructions=content.data["explanation"],
+                    instructions=explanation_text,
                     estimated_minutes=max(5, scheduled.estimated_minutes // 3),
                     sequence_number=seq,
                 )

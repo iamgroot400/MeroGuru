@@ -25,5 +25,7 @@ class Settings(BaseSettings):
     allow_remote_models: bool = True
     telemetry_enabled: bool = False
 
+    brain_base_url: str = "http://brain:8100"
+
 
 settings = Settings()

@@ -144,3 +144,35 @@ def get_mastery(goal_id: UUID, db: Session = Depends(get_db)) -> dict:
     ]
 
     return {"concepts": mastery_out, "assessment_history": history}
+
+
+@router.get("/{goal_id}/analytics")
+async def get_analytics(goal_id: UUID, db: Session = Depends(get_db)) -> dict:
+    """Fetches the raw append-only learning_events log for this goal and sends
+    it to the brain service to derive time-series views -- no new tables,
+    since every score and mastery transition is already recorded there. Kept
+    separate from /mastery (current-state snapshot) since this is
+    history-shaped data a chart consumes differently than a table does."""
+    from app.models.mastery import LearningEvent
+    from app.services import brain_client
+
+    events = (
+        db.query(LearningEvent)
+        .filter(
+            LearningEvent.goal_id == goal_id,
+            LearningEvent.event_type.in_(["assessment_completed", "lesson_feedback"]),
+        )
+        .order_by(LearningEvent.created_at.asc())
+        .all()
+    )
+    raw_events = [
+        {"event_type": e.event_type, "event_data": e.event_data, "created_at": e.created_at} for e in events
+    ]
+    try:
+        return await brain_client.analytics(raw_events)
+    except Exception:
+        from packages.learning_engine.analytics import RawEvent, compute_analytics
+
+        return compute_analytics(
+            [RawEvent(event_type=e["event_type"], event_data=e["event_data"], created_at=e["created_at"]) for e in raw_events]
+        )

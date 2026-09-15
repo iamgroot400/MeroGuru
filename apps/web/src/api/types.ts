@@ -31,6 +31,8 @@ export interface LessonSummary {
   scheduled_date?: string;
   completed_at?: string | null;
   status?: string;
+  sequence_number?: number;
+  concept_ids?: string[];
 }
 export interface Plan {
   id: string;
@@ -87,6 +89,11 @@ export interface MasteryRecord {
 export interface Mastery {
   concepts: MasteryRecord[];
   assessment_history?: Attempt[];
+}
+export interface Analytics {
+  score_trend: { date: string; score: number; concept_id?: string }[];
+  mastery_progress: { date: string; mastered_count: number }[];
+  time_spent_by_day: { date: string; minutes: number }[];
 }
 export interface Credential {
   id?: string;

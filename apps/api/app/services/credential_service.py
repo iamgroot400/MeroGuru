@@ -11,7 +11,7 @@ from packages.ai_providers.base import AIProvider
 from packages.ai_providers.registry import build_provider
 
 
-AI_PROVIDERS = {"openai", "anthropic", "openai_compatible", "ollama"}
+AI_PROVIDERS = {"openai", "anthropic", "groq", "openai_compatible", "ollama"}
 
 
 def create_credential(db: Session, payload: CredentialCreate) -> ProviderCredential:
@@ -69,7 +69,7 @@ def get_active_ai_provider(db: Session) -> AIProvider:
         db.query(ProviderCredential)
         .filter(
             ProviderCredential.is_active_provider.is_(True),
-            ProviderCredential.provider.in_(["openai", "anthropic", "openai_compatible", "ollama"]),
+            ProviderCredential.provider.in_(list(AI_PROVIDERS)),
         )
         .first()
     )
@@ -81,6 +81,44 @@ def get_active_ai_provider(db: Session) -> AIProvider:
         chat_model=settings.ollama_chat_model,
         embedding_model=settings.ollama_embedding_model,
     )
+
+
+def get_active_ai_provider_config(db: Session) -> dict:
+    """Same resolution order as get_active_ai_provider(), but returns the raw
+    provider settings instead of a constructed AIProvider -- the brain service
+    lives in a separate process, so its provider must be rebuilt there from a
+    serialized config sent over HTTP rather than passed as a live object."""
+    from app.core.config import settings
+
+    credential = (
+        db.query(ProviderCredential)
+        .filter(
+            ProviderCredential.is_active_provider.is_(True),
+            ProviderCredential.provider.in_(list(AI_PROVIDERS)),
+        )
+        .first()
+    )
+    if credential is not None:
+        api_key = None if credential.provider == "ollama" else decrypt_secret(credential.encrypted_secret)
+        chat_model = credential.chat_model
+        embedding_model = credential.embedding_model
+        if credential.provider == "ollama":
+            chat_model = chat_model or settings.ollama_chat_model
+            embedding_model = embedding_model or settings.ollama_embedding_model
+        return {
+            "provider": credential.provider,
+            "api_key": api_key,
+            "base_url": credential.base_url,
+            "chat_model": chat_model,
+            "embedding_model": embedding_model,
+        }
+    return {
+        "provider": settings.ai_provider,
+        "api_key": None,
+        "base_url": settings.ollama_base_url,
+        "chat_model": settings.ollama_chat_model,
+        "embedding_model": settings.ollama_embedding_model,
+    }
 
 
 def get_youtube_api_key(db: Session) -> str | None:

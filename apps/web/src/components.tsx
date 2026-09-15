@@ -1,8 +1,71 @@
-import type { ReactNode } from "react";
-import { BookOpen, Clock3, LoaderCircle, Sprout } from "lucide-react";
+import { useMemo, useState, type ReactNode } from "react";
+import { BookOpen, Clock3, LoaderCircle, Monitor, Moon, Sprout, Sun } from "lucide-react";
 import { Link } from "react-router-dom";
+import DOMPurify from "dompurify";
+import { marked } from "marked";
 import type { LessonSummary } from "./api/types";
 import { minutes } from "./utils";
+
+type ThemeChoice = "light" | "dark" | "system";
+const THEME_KEY = "meroguru:theme";
+
+function applyTheme(choice: ThemeChoice) {
+  const root = document.documentElement;
+  if (choice === "system") root.removeAttribute("data-theme");
+  else root.setAttribute("data-theme", choice);
+}
+function readStoredTheme(): ThemeChoice {
+  try {
+    const value = localStorage.getItem(THEME_KEY);
+    if (value === "light" || value === "dark" || value === "system") return value;
+  } catch {
+    /* Falls back to system theme for this session. */
+  }
+  return "system";
+}
+export function ThemeToggle() {
+  const [theme, setTheme] = useState<ThemeChoice>(() => {
+    const initial = readStoredTheme();
+    applyTheme(initial);
+    return initial;
+  });
+  const cycle = () => {
+    const next: ThemeChoice = theme === "system" ? "light" : theme === "light" ? "dark" : "system";
+    setTheme(next);
+    applyTheme(next);
+    try {
+      localStorage.setItem(THEME_KEY, next);
+    } catch {
+      /* Choice still applies for this session without storage. */
+    }
+  };
+  const Icon = theme === "light" ? Sun : theme === "dark" ? Moon : Monitor;
+  const label = theme === "light" ? "Light" : theme === "dark" ? "Dark" : "System";
+  return (
+    <button
+      type="button"
+      className="theme-toggle"
+      onClick={cycle}
+      aria-label={`Theme: ${label}. Click to switch.`}
+    >
+      <Icon size={17} aria-hidden="true" />
+      <span>{label}</span>
+    </button>
+  );
+}
+
+marked.setOptions({ breaks: true });
+
+// AI-generated lesson content is Markdown; render it as real structure (headings,
+// bold, code blocks, lists) rather than a flat text block. Sanitized because the
+// text ultimately comes from a model response, not a hardcoded template.
+export function Markdown({ text }: { text: string }) {
+  const html = useMemo(() => {
+    const parsed = marked.parse(text || "", { async: false }) as string;
+    return DOMPurify.sanitize(parsed);
+  }, [text]);
+  return <div className="prose markdown" dangerouslySetInnerHTML={{ __html: html }} />;
+}
 
 export function Loading({
   children = "Opening your learning space…",
@@ -118,11 +181,11 @@ export function MasteryBar({
   );
 }
 export function Badge({ state = "not_started" }: { state?: string }) {
-  return (
-    <span
-      className={`badge ${state === "mastered" || state === "completed" ? "success" : ""}`}
-    >
-      {state.replaceAll("_", " ")}
-    </span>
-  );
+  const tone =
+    state === "mastered" || state === "completed"
+      ? "success"
+      : state === "up_next"
+        ? "accent"
+        : "";
+  return <span className={`badge ${tone}`}>{state.replaceAll("_", " ")}</span>;
 }

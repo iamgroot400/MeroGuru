@@ -56,3 +56,70 @@ def generate_plan_task(self, goal_id: str, job_id: str) -> None:
             db.commit()
     finally:
         db.close()
+
+
+@celery_app.task(name="enrich_adaptation_task", max_retries=1)
+def enrich_adaptation_task(
+    learning_event_id: str,
+    concept_id: str,
+    previous_mastery: float,
+    practice_completion: float,
+    current_event: dict,
+    history: list[dict],
+) -> None:
+    """Runs the AI estimator's supplementary suggestion out of the request path.
+    Quiz grading already committed the deterministic floor result synchronously
+    (see mastery_service.record_attempt_and_update_mastery) and returned to the
+    learner instantly; this task only ever adds additional_support metadata onto
+    that already-final learning_event, never revises mastery_score/mastery_state.
+    A failure here (brain down, AI call fails, timeout) just leaves the event at
+    its floor-only defaults -- there is nothing to roll back."""
+    def _to_event(e: dict):
+        from packages.learning_engine.adaptation.signals import AssessmentEvent
+
+        return AssessmentEvent(
+            concept_id=concept_id,
+            score=e["score"],
+            confidence=e["confidence"],
+            completed_at=datetime.fromisoformat(e["completed_at"]),
+            time_spent_minutes=e["time_spent_minutes"],
+            estimated_minutes=e["estimated_minutes"],
+        )
+
+    db = None
+    try:
+        from app.db.session import SessionLocal
+        from app.models.mastery import LearningEvent
+        from app.services import brain_client
+        from app.services.credential_service import get_active_ai_provider_config
+
+        db = SessionLocal()
+        provider_config = get_active_ai_provider_config(db)
+        result = asyncio.run(
+            brain_client.adapt(
+                provider_config=provider_config,
+                concept_id=concept_id,
+                previous_mastery=previous_mastery,
+                practice_completion=practice_completion,
+                current=_to_event(current_event),
+                history=[_to_event(e) for e in history],
+            )
+        )
+        if not result["additional_support"] and result["adaptation_source"] == "floor":
+            return  # nothing to add -- leave the event at its already-correct defaults
+
+        event = db.get(LearningEvent, learning_event_id)
+        if event is None:
+            return
+        event.event_data = {
+            **event.event_data,
+            "additional_support": result["additional_support"],
+            "adaptation_source": result["adaptation_source"],
+            "suggestion_rejected_reason": result["suggestion_rejected_reason"],
+        }
+        db.commit()
+    except Exception:
+        logger.exception("adaptation enrichment failed for learning_event %s", learning_event_id)
+    finally:
+        if db is not None:
+            db.close()

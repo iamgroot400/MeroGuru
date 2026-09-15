@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
 import { LoaderCircle } from "lucide-react";
 import { idPath, optional, post, request } from "../api/client";
-import type { Concept, Goal, Job, Mastery } from "../api/types";
+import type { Analytics, Concept, Goal, Job, LessonSummary, Mastery, Plan } from "../api/types";
 import { useAsync } from "../hooks";
 import { useGoals } from "../context";
 import {
@@ -14,6 +14,7 @@ import {
   PageHeading,
   Time,
 } from "../components";
+import { ScoreTrendChart, TimeSpentChart } from "../charts";
 import { orderedConcepts, percent } from "../utils";
 import { normalizeConcepts } from "../api/adapters";
 
@@ -56,23 +57,40 @@ function GoalDetail({
     requestInFlight = useRef(false);
   const state = useAsync(path, async (signal) => {
     const goal = await request<Goal>(path, { signal });
-    const [map, mastery] = await Promise.all([
+    const [map, mastery, plan, analytics] = await Promise.all([
       optional<Concept[] | { concepts: Concept[] }>(
         `${path}/concept-map`,
         signal,
       ),
       optional<Mastery | Mastery["concepts"]>(`${path}/mastery`, signal),
+      goal.active_plan_id
+        ? optional<Plan>(`/plans/${idPath(goal.active_plan_id)}`, signal)
+        : Promise.resolve(null),
+      optional<Analytics>(`${path}/analytics`, signal),
     ]);
+    const lessons = [...(plan?.lessons || [])].sort((a, b) =>
+      (a.scheduled_date || "").localeCompare(b.scheduled_date || ""),
+    );
     return {
       goal,
       concepts: orderedConcepts(normalizeConcepts(map)),
       mastery: Array.isArray(mastery) ? { concepts: mastery } : mastery,
+      lessons,
+      analytics,
     };
   });
   const reload = state.reload,
     reloadGoals = goals.reload;
   const callbacks = useRef({ reload, reloadGoals });
   callbacks.current = { reload, reloadGoals };
+  useEffect(() => {
+    // Visiting a goal's roadmap/progress by any route (link, direct URL, or the
+    // picker below) becomes "the" current goal, so navigating back here later
+    // (e.g. from the sidebar) resumes the same course instead of always
+    // reverting to the most recently created one.
+    goals.select(goalId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [goalId]);
   const start = async () => {
     if (requestInFlight.current) return;
     requestInFlight.current = true;
@@ -145,13 +163,18 @@ function GoalDetail({
   if (state.error)
     return <ErrorState message={state.error} retry={state.reload} />;
   if (!state.data) return null;
-  const { goal, concepts, mastery } = state.data;
+  const { goal, concepts, mastery, lessons, analytics } = state.data;
   const statusFor = (c: Concept) =>
     mastery?.concepts.find((m) => m.concept_id === c.id)?.mastery_state ||
     c.mastery_state ||
     "not_started";
   const mastered = concepts.filter((c) => statusFor(c) === "mastered").length;
   const generating = starting || !!jobId;
+  const currentLessonId = lessons.find((l) => !l.completed_at && l.status !== "completed")?.id;
+  const conceptTitlesFor = (lesson: LessonSummary) =>
+    (lesson.concept_ids || [])
+      .map((key) => concepts.find((c) => c.external_key === key)?.title)
+      .filter((title): title is string => !!title);
   return (
     <>
       <PageHeading
@@ -163,6 +186,25 @@ function GoalDetail({
       >
         {goal.title}
       </PageHeading>
+      {goals.data && goals.data.length > 1 && (
+        <div className="goal-select goal-select-inline">
+          <label htmlFor="goal-page-select">Viewing course</label>
+          <select
+            id="goal-page-select"
+            value={goalId}
+            onChange={(e) => {
+              goals.select(e.target.value);
+              navigate(`/goals/${encodeURIComponent(e.target.value)}/${mode}`);
+            }}
+          >
+            {goals.data.map((g) => (
+              <option key={g.id} value={g.id}>
+                {g.title}
+              </option>
+            ))}
+          </select>
+        </div>
+      )}
       <nav className="tabs" aria-label="Goal views">
         <Link
           aria-current={mode === "roadmap" ? "page" : undefined}
@@ -237,7 +279,64 @@ function GoalDetail({
             </p>
           </div>
           {mode === "roadmap" ? (
-            <ol className="roadmap-list">
+            <>
+              {lessons.length > 0 && (
+                <section className="lesson-path">
+                  <h2>Your path, day by day</h2>
+                  <p className="muted">
+                    Jump to any lesson. Your current one is highlighted.
+                  </p>
+                  <ol className="lesson-path-list">
+                    {lessons.map((lesson) => {
+                      const isDone = !!lesson.completed_at || lesson.status === "completed";
+                      const isCurrent = lesson.id === currentLessonId;
+                      const conceptTitles = conceptTitlesFor(lesson);
+                      return (
+                        <li
+                          key={lesson.id}
+                          className={
+                            isCurrent
+                              ? "lesson-path-item current"
+                              : isDone
+                                ? "lesson-path-item done"
+                                : "lesson-path-item"
+                          }
+                        >
+                          <Link to={`/lessons/${idPath(lesson.id)}`} className="lesson-path-link">
+                            <div className="lesson-path-status" aria-hidden="true">
+                              {isDone ? "✓" : isCurrent ? "●" : "○"}
+                            </div>
+                            <div className="lesson-path-content">
+                              <div className="section-heading">
+                                <h3>{lesson.title}</h3>
+                                {isCurrent && <Badge state="up_next" />}
+                                {isDone && <Badge state="completed" />}
+                              </div>
+                              <div className="concept-meta">
+                                <Time value={lesson.estimated_minutes} />
+                                {lesson.scheduled_date && (
+                                  <span>
+                                    {new Date(lesson.scheduled_date).toLocaleDateString(undefined, {
+                                      weekday: "short",
+                                      month: "short",
+                                      day: "numeric",
+                                    })}
+                                  </span>
+                                )}
+                                {conceptTitles.length > 0 && (
+                                  <span>Covers: {conceptTitles.join(", ")}</span>
+                                )}
+                              </div>
+                            </div>
+                          </Link>
+                        </li>
+                      );
+                    })}
+                  </ol>
+                </section>
+              )}
+              <h2>Concepts in this goal</h2>
+              <ol className="roadmap-list">
               {concepts.map((c) => (
                 <li key={c.id}>
                   <div className="concept-content">
@@ -257,9 +356,29 @@ function GoalDetail({
                   </div>
                 </li>
               ))}
-            </ol>
+              </ol>
+            </>
           ) : (
             <>
+              {analytics && (
+                <>
+                  <div className="chart-card">
+                    <h3>Quiz score trend</h3>
+                    <p className="muted">
+                      Each point is one quiz attempt, in order. The dashed line
+                      marks the 70% pass threshold.
+                    </p>
+                    <ScoreTrendChart points={analytics.score_trend} />
+                  </div>
+                  <div className="chart-card">
+                    <h3>Time spent per day</h3>
+                    <p className="muted">
+                      Minutes logged via lesson feedback, most recent days.
+                    </p>
+                    <TimeSpentChart points={analytics.time_spent_by_day} />
+                  </div>
+                </>
+              )}
               <section>
                 <h2>Understanding, concept by concept</h2>
                 <div className="mastery-list">

@@ -17,6 +17,11 @@ const providers = [
     description: "Use Claude models for explanations and lessons.",
   },
   {
+    id: "groq",
+    name: "Groq",
+    description: "Fast inference on open models like Llama -- often a strong free-tier option.",
+  },
+  {
     id: "ollama",
     name: "Ollama",
     description: "Connect models running on your own machine.",

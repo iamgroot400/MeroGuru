@@ -2,7 +2,71 @@
 
 Kept honest and current. Updated after each working slice, not aspirationally.
 
-Last updated: 2026-09-14
+Last updated: 2026-09-15
+
+## Instant quiz grading — AI suggestion moved off the request path (2026-09-15)
+
+The service split alone did not make grading feel faster: `assessments.py` still
+`await`ed the adaptation call end-to-end, so submitting a quiz stayed blocked on an
+Ollama structured-generation call regardless of which process made it. Fixed the
+actual bottleneck: `mastery_service.record_attempt_and_update_mastery` now computes
+the deterministic floor and updates `mastery_records` with zero network calls and
+returns instantly; a new Celery task, `enrich_adaptation_task`
+(`workers/tasks.py`), calls the brain service afterward and patches
+`additional_support`/`adaptation_source` onto the already-committed
+`learning_events` row once the AI call finishes (or leaves it at its correct
+floor-only defaults if the call fails — nothing to roll back, since the floor was
+already final). Verified: `apps/api`'s 38 tests pass (2 new: the task is registered
+under the expected name, and it swallows a failure — DB or brain unreachable —
+without raising, which Celery would otherwise treat as a failed/retried job).
+
+**What this does and doesn't fix:** grading now returns in milliseconds no matter
+how slow or unreachable the configured Ollama model is — that's the actual
+"instant responsiveness" fix. It does **not** make Ollama itself generate tokens
+faster; that's bound by model size and hardware. Lesson/concept-map generation was
+already off the request path (fire-and-forget via the existing `generate_plan_task`
+Celery job, returning 202 immediately) so it didn't need this change.
+
+## Orchestrator/brain service split (2026-09-15)
+
+Split the monolithic `apps/api` into two services communicating over HTTP:
+
+- **`apps/api` (orchestrator)** keeps all persistence, routing, and CRUD. It now
+  calls out to brain instead of running adaptation/analytics in-process.
+- **`apps/brain` (brain)** is a new, stateless FastAPI service (`apps/brain/app/`)
+  exposing `POST /brain/v1/adapt` and `POST /brain/v1/analytics`. No database of its
+  own — every call receives exactly the context it needs (event history, resolved AI
+  provider config as plain fields, not a live object) and returns a plain result for
+  the orchestrator to persist.
+
+Extracted the actual logic into shared, dependency-free functions so neither service
+duplicates it: `packages/learning_engine/adaptation/apply.py::run_adaptation` (the
+floor → estimator → verdict → mastery-scoring pipeline, previously inlined in
+`mastery_service.py`) and `packages/learning_engine/analytics.py::compute_analytics`
+(previously inlined in `goals.get_analytics`). Both services import these; brain's
+`app/main.py` is a thin HTTP wrapper around them.
+
+Added `credential_service.get_active_ai_provider_config()` — the same resolution
+order as `get_active_ai_provider()` (active BYOK credential, else deployment Ollama
+fallback) but returning a serializable dict instead of a live `AIProvider`, since a
+provider object can't cross the process boundary; brain rebuilds the real provider
+from this dict via `build_provider()`.
+
+`apps/api/app/services/brain_client.py` is the httpx wrapper the orchestrator calls.
+Both call sites (`mastery_service.record_attempt_and_update_mastery`,
+`goals.get_analytics`) wrap the brain call in try/except and fall back to computing
+the same result locally on failure — brain being down degrades grading to
+floor-only (no AI suggestions) rather than breaking it. Verified: `apps/brain`
+standalone via `TestClient` (4 tests: health check, adapt with an unreachable AI
+provider correctly falls back to `adaptation_source: "floor"`, adapt rejects an
+unknown provider name with 422, analytics derives all three time series correctly)
+and `apps/api`'s `brain_client` functions correctly raise on an unreachable brain
+base URL (2 tests) so the fallback paths actually trigger. `docker-compose.yml` gets
+a new `brain` service (port 8100); `api`/`worker` get `BRAIN_BASE_URL` and
+`depends_on: brain`. Not yet verified against the real Docker stack in this
+environment (host machine could not run Docker during this session) — standalone
+`TestClient` verification and the full existing test suite (36 `apps/api` + 4
+`apps/brain`, all passing) is what's confirmed so far.
 
 ## Full-stack verification pass (docker compose up --build)
 

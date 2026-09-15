@@ -35,6 +35,20 @@ services:
     ports:
       - "11434:11434"
 
+  brain:
+    build:
+      context: .
+      dockerfile: apps/brain/Dockerfile
+    restart: unless-stopped
+    env_file: .env
+    ports:
+      - "8100:8100"
+    volumes:
+      - ./apps/brain:/app/apps/brain
+      - ./packages:/app/packages
+    command: >
+      sh -c "uvicorn app.main:app --host 0.0.0.0 --port 8100 --reload --reload-dir /app/apps/brain --reload-dir /app/packages"
+
   api:
     build:
       context: .
@@ -44,11 +58,14 @@ services:
     environment:
       DATABASE_URL: postgresql+psycopg://meroguru:change-me@postgres:5432/meroguru
       REDIS_URL: redis://redis:6379/0
+      BRAIN_BASE_URL: http://brain:8100
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
+      brain:
+        condition: service_started
     ports:
       - "8000:8000"
     volumes:
@@ -66,11 +83,14 @@ services:
     environment:
       DATABASE_URL: postgresql+psycopg://meroguru:change-me@postgres:5432/meroguru
       REDIS_URL: redis://redis:6379/0
+      BRAIN_BASE_URL: http://brain:8100
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
+      brain:
+        condition: service_started
     volumes:
       - ./apps/api:/app/apps/api
       - ./packages:/app/packages

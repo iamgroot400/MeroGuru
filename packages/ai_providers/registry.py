@@ -10,7 +10,7 @@ from packages.ai_providers.base import AIProvider
 from packages.ai_providers.ollama import OllamaProvider
 from packages.ai_providers.openai_compatible import AnthropicProvider, OpenAICompatibleProvider
 
-SUPPORTED_PROVIDERS = {"openai", "anthropic", "openai_compatible", "ollama"}
+SUPPORTED_PROVIDERS = {"openai", "anthropic", "groq", "openai_compatible", "ollama"}
 
 
 def build_provider(
@@ -36,6 +36,15 @@ def build_provider(
             api_key=api_key,
             base_url=base_url,
             chat_model=chat_model or "gpt-4o-mini",
+            embedding_model=embedding_model or "text-embedding-3-small",
+        )
+    if provider == "groq":
+        if not api_key:
+            raise ValueError("groq provider requires an api_key")
+        return OpenAICompatibleProvider(
+            api_key=api_key,
+            base_url=base_url or "https://api.groq.com/openai/v1",
+            chat_model=chat_model or "llama-3.3-70b-versatile",
             embedding_model=embedding_model or "text-embedding-3-small",
         )
     if provider == "anthropic":

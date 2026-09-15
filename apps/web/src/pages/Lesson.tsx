@@ -4,7 +4,7 @@ import { ExternalLink } from "lucide-react";
 import { idPath, optional, post, request } from "../api/client";
 import type { Assessment, Attempt, Lesson, Resource } from "../api/types";
 import { useAsync } from "../hooks";
-import { Empty, ErrorState, Loading, PageHeading, Time } from "../components";
+import { Empty, ErrorState, Loading, Markdown, PageHeading, Time } from "../components";
 import { percent, safeUrl } from "../utils";
 import { normalizeLesson } from "../api/adapters";
 
@@ -354,7 +354,7 @@ function LessonDetail({ lessonId }: { lessonId: string }) {
       <section className="lesson-section">
         <h2>Let’s explore</h2>
         {lesson.explanation ? (
-          <div className="prose">{lesson.explanation}</div>
+          <Markdown text={lesson.explanation} />
         ) : (
           <p className="muted">An explanation has not been provided yet.</p>
         )}
@@ -371,9 +371,11 @@ function LessonDetail({ lessonId }: { lessonId: string }) {
       </section>
       <section className="practice">
         <h2>Put it into practice</h2>
-        <p className="prose">
-          {lesson.practice_task || "No practice task has been provided yet."}
-        </p>
+        {lesson.practice_task ? (
+          <Markdown text={lesson.practice_task} />
+        ) : (
+          <p className="prose muted">No practice task has been provided yet.</p>
+        )}
       </section>
       <Quiz lessonId={lessonId} />
       <section className="lesson-section citations">

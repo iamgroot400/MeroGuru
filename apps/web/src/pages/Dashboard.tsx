@@ -1,15 +1,16 @@
 import { Link } from "react-router-dom";
-import { ArrowUpRight, Plus, Sprout } from "lucide-react";
+import { ArrowUpRight, Check, Plus, Sprout } from "lucide-react";
 import { useGoals } from "../context";
 import { useAsync } from "../hooks";
 import { optional, request, idPath } from "../api/client";
-import type { Goal, LessonSummary, Plan } from "../api/types";
+import type { Credential, Goal, LessonSummary, Mastery, Plan } from "../api/types";
 import {
   Badge,
   Empty,
   ErrorState,
   LessonLink,
   Loading,
+  MasteryBar,
   PageHeading,
   Time,
 } from "../components";
@@ -152,6 +153,131 @@ function CurrentStudy({ goal }: { goal: Goal }) {
     </div>
   );
 }
+function GoalCard({ goal }: { goal: Goal }) {
+  const state = useAsync(`mastery-summary-${goal.id}`, (signal) =>
+    optional<Mastery | Mastery["concepts"]>(
+      `/goals/${idPath(goal.id)}/mastery`,
+      signal,
+    ),
+  );
+  const concepts = Array.isArray(state.data)
+    ? state.data
+    : state.data?.concepts || [];
+  const mastered = concepts.filter((c) => c.mastery_state === "mastered").length;
+  return (
+    <article className="goal-card">
+      <div className="goal-card-top">
+        <Badge state={goal.starting_level} />
+        {!!concepts.length && (
+          <span className="goal-card-progress-label">
+            {mastered}/{concepts.length} mastered
+          </span>
+        )}
+      </div>
+      <h3>
+        <Link to={`/goals/${idPath(goal.id)}/roadmap`}>{goal.title}</Link>
+      </h3>
+      <p>{goal.description || "Your personal learning path."}</p>
+      {concepts.length > 0 ? (
+        <MasteryBar mastered={mastered} total={concepts.length} />
+      ) : (
+        <p className="muted">
+          {state.loading ? "Checking progress…" : "No roadmap generated yet."}
+        </p>
+      )}
+      <div className="goal-meta">
+        <Time value={goal.minutes_per_day} />
+        <span>per study day</span>
+      </div>
+      <div className="button-row">
+        <Link
+          className="text-link"
+          to={`/goals/${idPath(goal.id)}/roadmap`}
+        >
+          Explore roadmap
+        </Link>
+        <Link
+          className="text-link"
+          to={`/goals/${idPath(goal.id)}/progress`}
+        >
+          View progress
+        </Link>
+      </div>
+    </article>
+  );
+}
+const AI_PROVIDER_IDS = ["openai", "anthropic", "groq", "openai_compatible", "ollama"];
+
+function Onboarding() {
+  const state = useAsync("onboarding-credentials", async (signal) => {
+    try {
+      return await request<Credential[]>("/credentials", { signal });
+    } catch {
+      return null; // Fails open: onboarding still shows, just as "not yet connected".
+    }
+  });
+  const hasAIProvider = !!state.data?.some(
+    (c) => AI_PROVIDER_IDS.includes(c.provider) && c.is_active_provider,
+  );
+  return (
+    <section className="welcome">
+      <div>
+        <Sprout size={38} />
+        <h2>What have you always wanted to learn?</h2>
+        <p>
+          Start with a goal. MeroGuru will help you find a path, build
+          understanding, and fit learning into your day.
+        </p>
+        <ol className="onboarding-steps">
+          <li className={hasAIProvider ? "done" : ""}>
+            <span className="onboarding-step-icon" aria-hidden="true">
+              {hasAIProvider ? <Check size={14} /> : "1"}
+            </span>
+            <div>
+              <strong>
+                {hasAIProvider
+                  ? "AI provider connected"
+                  : "Optional: connect an AI provider"}
+              </strong>
+              <p>
+                {hasAIProvider
+                  ? "Your lessons will use this provider."
+                  : "MeroGuru works out of the box with a local Ollama model. Add your own OpenAI, Anthropic, or Groq key in Settings for stronger results."}
+              </p>
+              {!hasAIProvider && (
+                <Link className="text-link" to="/settings">
+                  Go to Settings
+                </Link>
+              )}
+            </div>
+          </li>
+          <li>
+            <span className="onboarding-step-icon" aria-hidden="true">
+              2
+            </span>
+            <div>
+              <strong>Create your first goal</strong>
+              <p>
+                Tell MeroGuru what you want to learn, your level, and how much
+                time you have each day.
+              </p>
+              <Link className="button" to="/goals/new">
+                Create your first goal
+              </Link>
+            </div>
+          </li>
+        </ol>
+      </div>
+      <div className="learning-sketch" aria-hidden="true">
+        <span>Start with curiosity</span>
+        <i />
+        <span>Build understanding</span>
+        <i />
+        <span>Make it your own</span>
+      </div>
+    </section>
+  );
+}
 export function Dashboard() {
   const goals = useGoals();
   const active =
@@ -174,29 +300,7 @@ export function Dashboard() {
       ) : goals.error ? (
         <ErrorState message={goals.error} retry={goals.reload} />
       ) : !goals.data?.length ? (
-        <section className="welcome">
-          <div>
-            <Sprout size={38} />
-            <h2>What have you always wanted to learn?</h2>
-            <p>
-              Start with a goal. MeroGuru will help you find a path, build
-              understanding, and fit learning into your day.
-            </p>
-            <Link className="button" to="/goals/new">
-              Create your first goal
-            </Link>
-            <Link className="text-link setup-link" to="/settings">
-              Set up your AI provider
-            </Link>
-          </div>
-          <div className="learning-sketch" aria-hidden="true">
-            <span>Start with curiosity</span>
-            <i />
-            <span>Build understanding</span>
-            <i />
-            <span>Make it your own</span>
-          </div>
-        </section>
+        <Onboarding />
       ) : (
         <>
           {goals.current && (
@@ -216,25 +320,7 @@ export function Dashboard() {
             ) : (
               <div className="goals-grid">
                 {active.map((goal) => (
-                  <article className="goal-card" key={goal.id}>
-                    <Badge state={goal.starting_level} />
-                    <h3>
-                      <Link to={`/goals/${idPath(goal.id)}/roadmap`}>
-                        {goal.title}
-                      </Link>
-                    </h3>
-                    <p>{goal.description || "Your personal learning path."}</p>
-                    <div className="goal-meta">
-                      <Time value={goal.minutes_per_day} />
-                      <span>per study day</span>
-                    </div>
-                    <Link
-                      className="text-link"
-                      to={`/goals/${idPath(goal.id)}/roadmap`}
-                    >
-                      Explore roadmap
-                    </Link>
-                  </article>
+                  <GoalCard key={goal.id} goal={goal} />
                 ))}
               </div>
             )}

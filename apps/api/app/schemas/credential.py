@@ -7,7 +7,7 @@ from pydantic import BaseModel, Field
 
 
 class CredentialCreate(BaseModel):
-    provider: str = Field(pattern="^(openai|anthropic|openai_compatible|ollama|youtube)$")
+    provider: str = Field(pattern="^(openai|anthropic|groq|openai_compatible|ollama|youtube)$")
     api_key: str = Field(min_length=1)
     base_url: str | None = None
     chat_model: str | None = None

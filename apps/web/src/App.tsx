@@ -22,7 +22,7 @@ import { GoalWizard } from "./pages/GoalWizard";
 import { Settings } from "./pages/Settings";
 import { GoalPage } from "./pages/GoalPage";
 import { LessonPage } from "./pages/Lesson";
-import { Empty } from "./components";
+import { Empty, ThemeToggle } from "./components";
 
 export function App() {
   const goals = useGoals(),
@@ -106,9 +106,12 @@ export function App() {
           <p>Make room for curiosity.</p>
           <small>Your pace. Your path.</small>
         </div>
-        <div className="instance-label">
-          <span />
-          Your personal instance
+        <div className="sidebar-footer">
+          <ThemeToggle />
+          <div className="instance-label">
+            <span />
+            Your personal instance
+          </div>
         </div>
       </aside>
       <div className="main-shell">
