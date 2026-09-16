@@ -67,11 +67,13 @@ export interface Question {
   options?: (string | { id: string; text: string })[];
 }
 export interface Assessment {
+  passing_score?: number;
   id: string;
   questions: Question[];
   attempts?: Attempt[];
 }
 export interface Attempt {
+  passed?: boolean;
   id: string;
   assessment_id?: string;
   title?: string;

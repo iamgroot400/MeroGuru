@@ -2,7 +2,14 @@ import { useEffect, useRef, useState } from "react";
 import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
 import { LoaderCircle } from "lucide-react";
 import { idPath, optional, post, request } from "../api/client";
-import type { Analytics, Concept, Goal, Job, LessonSummary, Mastery, Plan } from "../api/types";
+import type {
+  Analytics,
+  Concept,
+  Goal,
+  Job,
+  Mastery,
+  Plan,
+} from "../api/types";
 import { useAsync } from "../hooks";
 import { useGoals } from "../context";
 import {
@@ -12,10 +19,10 @@ import {
   Loading,
   MasteryBar,
   PageHeading,
-  Time,
 } from "../components";
 import { ScoreTrendChart, TimeSpentChart } from "../charts";
 import { orderedConcepts, percent } from "../utils";
+import { InteractivePath } from "../InteractivePath";
 import { normalizeConcepts } from "../api/adapters";
 
 function readJob(goalId: string) {
@@ -53,6 +60,7 @@ function GoalDetail({
     [error, setError] = useState(""),
     [starting, setStarting] = useState(false),
     [pollRevision, setPollRevision] = useState(0);
+  const [masteryFilter, setMasteryFilter] = useState("all");
   const didAutoStart = useRef(false),
     requestInFlight = useRef(false);
   const state = useAsync(path, async (signal) => {
@@ -63,8 +71,11 @@ function GoalDetail({
         signal,
       ),
       optional<Mastery | Mastery["concepts"]>(`${path}/mastery`, signal),
-      goal.active_plan_id
-        ? optional<Plan>(`/plans/${idPath(goal.active_plan_id)}`, signal)
+      goal.active_plan_id || goal.plan_id
+        ? optional<Plan>(
+            `/plans/${idPath((goal.active_plan_id || goal.plan_id)!)}`,
+            signal,
+          )
         : Promise.resolve(null),
       optional<Analytics>(`${path}/analytics`, signal),
     ]);
@@ -170,11 +181,6 @@ function GoalDetail({
     "not_started";
   const mastered = concepts.filter((c) => statusFor(c) === "mastered").length;
   const generating = starting || !!jobId;
-  const currentLessonId = lessons.find((l) => !l.completed_at && l.status !== "completed")?.id;
-  const conceptTitlesFor = (lesson: LessonSummary) =>
-    (lesson.concept_ids || [])
-      .map((key) => concepts.find((c) => c.external_key === key)?.title)
-      .filter((title): title is string => !!title);
   return (
     <>
       <PageHeading
@@ -279,99 +285,26 @@ function GoalDetail({
             </p>
           </div>
           {mode === "roadmap" ? (
-            <>
-              {lessons.length > 0 && (
-                <section className="lesson-path">
-                  <h2>Your path, day by day</h2>
-                  <p className="muted">
-                    Jump to any lesson. Your current one is highlighted.
-                  </p>
-                  <ol className="lesson-path-list">
-                    {lessons.map((lesson) => {
-                      const isDone = !!lesson.completed_at || lesson.status === "completed";
-                      const isCurrent = lesson.id === currentLessonId;
-                      const conceptTitles = conceptTitlesFor(lesson);
-                      return (
-                        <li
-                          key={lesson.id}
-                          className={
-                            isCurrent
-                              ? "lesson-path-item current"
-                              : isDone
-                                ? "lesson-path-item done"
-                                : "lesson-path-item"
-                          }
-                        >
-                          <Link to={`/lessons/${idPath(lesson.id)}`} className="lesson-path-link">
-                            <div className="lesson-path-status" aria-hidden="true">
-                              {isDone ? "✓" : isCurrent ? "●" : "○"}
-                            </div>
-                            <div className="lesson-path-content">
-                              <div className="section-heading">
-                                <h3>{lesson.title}</h3>
-                                {isCurrent && <Badge state="up_next" />}
-                                {isDone && <Badge state="completed" />}
-                              </div>
-                              <div className="concept-meta">
-                                <Time value={lesson.estimated_minutes} />
-                                {lesson.scheduled_date && (
-                                  <span>
-                                    {new Date(lesson.scheduled_date).toLocaleDateString(undefined, {
-                                      weekday: "short",
-                                      month: "short",
-                                      day: "numeric",
-                                    })}
-                                  </span>
-                                )}
-                                {conceptTitles.length > 0 && (
-                                  <span>Covers: {conceptTitles.join(", ")}</span>
-                                )}
-                              </div>
-                            </div>
-                          </Link>
-                        </li>
-                      );
-                    })}
-                  </ol>
-                </section>
-              )}
-              <h2>Concepts in this goal</h2>
-              <ol className="roadmap-list">
-              {concepts.map((c) => (
-                <li key={c.id}>
-                  <div className="concept-content">
-                    <div className="section-heading">
-                      <h2>{c.title}</h2>
-                      <Badge state={statusFor(c)} />
-                    </div>
-                    <p>{c.description}</p>
-                    <div className="concept-meta">
-                      <Time value={c.estimated_minutes} />
-                      <span>
-                        {c.prerequisite_ids?.length
-                          ? `Builds on: ${c.prerequisite_ids.map((id) => concepts.find((item) => item.id === id)?.title || id).join(", ")}`
-                          : "No prerequisites — start here"}
-                      </span>
-                    </div>
-                  </div>
-                </li>
-              ))}
-              </ol>
-            </>
+            <InteractivePath
+              goalId={goalId}
+              lessons={lessons}
+              concepts={concepts}
+              mastery={mastery}
+            />
           ) : (
             <>
               {analytics && (
                 <>
                   <div className="chart-card">
-                    <h3>Quiz score trend</h3>
+                    <h2>Quiz score trend</h2>
                     <p className="muted">
-                      Each point is one quiz attempt, in order. The dashed line
-                      marks the 70% pass threshold.
+                      Each point is one quiz attempt, in order. Select an
+                      attempt to explore the recorded result.
                     </p>
                     <ScoreTrendChart points={analytics.score_trend} />
                   </div>
                   <div className="chart-card">
-                    <h3>Time spent per day</h3>
+                    <h2>Time spent per day</h2>
                     <p className="muted">
                       Minutes logged via lesson feedback, most recent days.
                     </p>
@@ -381,34 +314,66 @@ function GoalDetail({
               )}
               <section>
                 <h2>Understanding, concept by concept</h2>
+                <div
+                  className="filter-row"
+                  role="group"
+                  aria-label="Filter concepts"
+                >
+                  {[
+                    ["all", "All concepts"],
+                    ["needs_review", "Needs review"],
+                    ["mastered", "Mastered"],
+                  ].map(([value, label]) => (
+                    <button
+                      className="secondary"
+                      aria-pressed={masteryFilter === value}
+                      key={value}
+                      onClick={() => setMasteryFilter(value)}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+                {!concepts.some(
+                  (c) =>
+                    masteryFilter === "all" || statusFor(c) === masteryFilter,
+                ) && (
+                  <p className="notice">No concepts match this filter yet.</p>
+                )}
                 <div className="mastery-list">
-                  {concepts.map((c) => {
-                    const record = mastery?.concepts.find(
-                      (m) => m.concept_id === c.id,
-                    );
-                    return (
-                      <article key={c.id}>
-                        <div className="section-heading">
-                          <h3>{c.title}</h3>
-                          <Badge state={statusFor(c)} />
-                        </div>
-                        {record?.mastery_score != null ? (
-                          <div className="score-line">
-                            <progress
-                              aria-label={`${c.title} mastery`}
-                              max={100}
-                              value={percent(record.mastery_score)}
-                            />
-                            <span>{percent(record.mastery_score)}%</span>
+                  {concepts
+                    .filter(
+                      (c) =>
+                        masteryFilter === "all" ||
+                        statusFor(c) === masteryFilter,
+                    )
+                    .map((c) => {
+                      const record = mastery?.concepts.find(
+                        (m) => m.concept_id === c.id,
+                      );
+                      return (
+                        <article key={c.id}>
+                          <div className="section-heading">
+                            <h3>{c.title}</h3>
+                            <Badge state={statusFor(c)} />
                           </div>
-                        ) : (
-                          <p className="muted">
-                            No mastery score recorded yet.
-                          </p>
-                        )}
-                      </article>
-                    );
-                  })}
+                          {record?.mastery_score != null ? (
+                            <div className="score-line">
+                              <progress
+                                aria-label={`${c.title} mastery`}
+                                max={100}
+                                value={percent(record.mastery_score)}
+                              />
+                              <span>{percent(record.mastery_score)}%</span>
+                            </div>
+                          ) : (
+                            <p className="muted">
+                              No mastery score recorded yet.
+                            </p>
+                          )}
+                        </article>
+                      );
+                    })}
                 </div>
               </section>
               <section className="history">

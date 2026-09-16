@@ -22,6 +22,11 @@ const providers = [
     description: "Fast inference on open models like Llama -- often a strong free-tier option.",
   },
   {
+    id: "gemini",
+    name: "Gemini",
+    description: "Use Google's Gemini models, with a free-tier API key from Google AI Studio.",
+  },
+  {
     id: "ollama",
     name: "Ollama",
     description: "Connect models running on your own machine.",

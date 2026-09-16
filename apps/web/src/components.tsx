@@ -1,5 +1,13 @@
 import { useMemo, useState, type ReactNode } from "react";
-import { BookOpen, Clock3, LoaderCircle, Monitor, Moon, Sprout, Sun } from "lucide-react";
+import {
+  BookOpen,
+  Clock3,
+  LoaderCircle,
+  Monitor,
+  Moon,
+  Sprout,
+  Sun,
+} from "lucide-react";
 import { Link } from "react-router-dom";
 import DOMPurify from "dompurify";
 import { marked } from "marked";
@@ -17,7 +25,8 @@ function applyTheme(choice: ThemeChoice) {
 function readStoredTheme(): ThemeChoice {
   try {
     const value = localStorage.getItem(THEME_KEY);
-    if (value === "light" || value === "dark" || value === "system") return value;
+    if (value === "light" || value === "dark" || value === "system")
+      return value;
   } catch {
     /* Falls back to system theme for this session. */
   }
@@ -30,7 +39,8 @@ export function ThemeToggle() {
     return initial;
   });
   const cycle = () => {
-    const next: ThemeChoice = theme === "system" ? "light" : theme === "light" ? "dark" : "system";
+    const next: ThemeChoice =
+      theme === "system" ? "light" : theme === "light" ? "dark" : "system";
     setTheme(next);
     applyTheme(next);
     try {
@@ -40,7 +50,8 @@ export function ThemeToggle() {
     }
   };
   const Icon = theme === "light" ? Sun : theme === "dark" ? Moon : Monitor;
-  const label = theme === "light" ? "Light" : theme === "dark" ? "Dark" : "System";
+  const label =
+    theme === "light" ? "Light" : theme === "dark" ? "Dark" : "System";
   return (
     <button
       type="button"
@@ -64,7 +75,12 @@ export function Markdown({ text }: { text: string }) {
     const parsed = marked.parse(text || "", { async: false }) as string;
     return DOMPurify.sanitize(parsed);
   }, [text]);
-  return <div className="prose markdown" dangerouslySetInnerHTML={{ __html: html }} />;
+  return (
+    <div
+      className="prose markdown"
+      dangerouslySetInnerHTML={{ __html: html }}
+    />
+  );
 }
 
 export function Loading({
@@ -142,11 +158,17 @@ export function Time({ value }: { value?: number }) {
     </span>
   );
 }
-export function LessonLink({ lesson }: { lesson: LessonSummary }) {
+export function LessonLink({
+  lesson,
+  goalId,
+}: {
+  lesson: LessonSummary;
+  goalId?: string;
+}) {
   return (
     <Link
       className="lesson-link"
-      to={`/lessons/${encodeURIComponent(lesson.id)}`}
+      to={`/lessons/${encodeURIComponent(lesson.id)}${goalId ? "?goal=" + encodeURIComponent(goalId) : ""}`}
     >
       <BookOpen size={22} aria-hidden="true" />
       <span>

@@ -111,6 +111,18 @@ async function mock(page: Page, empty = false) {
           },
         ],
       };
+    else if (path.endsWith("/analytics"))
+      data = {
+        score_trend: [
+          { date: "2026-09-13", score: 0.4 },
+          { date: "2026-09-14", score: 0.8 },
+        ],
+        mastery_progress: [],
+        time_spent_by_day: [
+          { date: "2026-09-13", minutes: 20 },
+          { date: "2026-09-14", minutes: 25 },
+        ],
+      };
     else if (path === "/plans/plan-1")
       data = { id: "plan-1", lessons: [lesson] };
     else if (path === "/plans/plan-1/today") data = lesson;
@@ -185,7 +197,7 @@ test("dashboard, roadmap and progress show API data at 400px", async ({
   expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
   await page.getByRole("link", { name: "Roadmap", exact: true }).click();
   await expect(page.getByText("concepts mastered")).toContainText("1 of 2");
-  await expect(page.locator(".roadmap-list h2").first()).toHaveText(
+  await expect(page.locator(".concept-library summary").first()).toContainText(
     "Reading the night sky",
   );
   await page
@@ -193,6 +205,8 @@ test("dashboard, roadmap and progress show API data at 400px", async ({
     .last()
     .click();
   await expect(page.getByRole("cell", { name: "80%" })).toBeVisible();
+  await page.getByLabel("Explore an attempt").selectOption("0");
+  await expect(page.locator(".chart-inspector").first()).toContainText("40%");
 });
 test("goal wizard validates, saves exact preferences and polls the job", async ({
   page,
@@ -228,16 +242,27 @@ test("lesson supports backend activities, quiz, feedback and completion", async 
   await expect(
     page.getByText("Polaris sits close", { exact: false }),
   ).toBeVisible();
-  await page.getByLabel("Polaris", { exact: true }).check();
-  await page.getByRole("button", { name: "Check my answers" }).click();
-  await expect(page.getByText("You scored 100%")).toBeVisible();
-  await page.getByLabel("Difficulty", { exact: true }).selectOption("3");
-  await page.getByLabel("Usefulness", { exact: true }).selectOption("4");
-  await page.getByLabel("Confidence", { exact: true }).selectOption("4");
-  await page.getByLabel("Time spent (minutes)").fill("23");
-  await page.getByRole("button", { name: "Save feedback" }).click();
   await expect(
-    page.getByText("Feedback saved.", { exact: false }),
+    page.getByRole("button", { name: "Check Test your understanding" }),
+  ).toBeDisabled();
+  await page.getByRole("button", { name: "Continue to practice" }).click();
+  await page.getByLabel("I’ve attempted the practice task.").check();
+  await page.getByRole("button", { name: "Continue to quiz" }).click();
+  await page.getByRole("radio", { name: "Polaris", exact: true }).check();
+  await page
+    .getByLabel("How confident are you in your answers?")
+    .selectOption("0.75");
+  await page.screenshot({path:"test-results/lesson-desktop.png",fullPage:true});
+  await page.getByRole("button", { name: "Check my answers" }).click();
+  await expect(page.getByText("100%", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Continue to reflection" }).click();
+  await page.getByLabel("About right", { exact: true }).check();
+  await page.getByLabel("How useful was it?").selectOption("4");
+  await page.getByLabel("Confidence after practice").selectOption("0.75");
+  await page.getByLabel("Time spent (minutes)").fill("23");
+  await page.getByRole("button", { name: "Save reflection" }).click();
+  await expect(
+    page.getByText("Your reflection is saved.", { exact: true }),
   ).toBeVisible();
   expect(calls.find((c) => c.path.endsWith("/feedback"))?.body).toEqual({
     difficulty: "just_right",
@@ -353,4 +378,121 @@ test("all forms remain accessible and fit a 400px screen", async ({ page }) => {
     ).toBeLessThanOrEqual(400);
     expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
   }
+});
+
+test("failed answers require review and a retry before reflection", async ({
+  page,
+}) => {
+  const calls = await mock(page);
+  await page.route("**/api/v1/assessments/assessment-1/attempts", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        score: 0,
+        passed: false,
+        per_question: { q1: false },
+        explanations: { q1: "Polaris points north." },
+      }),
+    }),
+  );
+  await page.goto("/lessons/lesson-1");
+  await page.getByRole("button", { name: "Continue to practice" }).click();
+  await page.getByLabel("Your working notes").fill("Find the pointer stars.");
+  await page.getByLabel("I’ve attempted the practice task.").check();
+  await page.getByRole("button", { name: "Continue to quiz" }).click();
+  await page.getByRole("radio", { name: "Sirius", exact: true }).check();
+  await page
+    .getByLabel("How confident are you in your answers?")
+    .selectOption("0.5");
+  await page.getByRole("button", { name: "Check my answers" }).click();
+  await expect(page.getByText("Let’s give this another look.")).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Reflect Save your progress" }),
+  ).toBeDisabled();
+  expect(calls.some((c) => c.path.endsWith("/complete"))).toBe(false);
+  await page.getByRole("button", { name: "Try the quiz again" }).click();
+  await expect(
+    page.getByRole("radio", { name: "Sirius", exact: true }),
+  ).not.toBeChecked();
+  await page.reload();
+  await expect(
+    page.getByRole("heading", { name: "Check your understanding." }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "Practice Try it yourself" }).click();
+  await expect(page.getByLabel("Your working notes")).toHaveValue(
+    "Find the pointer stars.",
+  );
+});
+test("roadmap selection, history filters and dark mode work", async ({
+  page,
+}) => {
+  await mock(page);
+  await page.route("**/api/v1/plans/plan-1", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        id: "plan-1",
+        lessons: [
+          { ...lesson, concept_ids: ["sky"] },
+          {
+            ...lesson,
+            id: "lesson-2",
+            title: "How stars evolve",
+            concept_ids: ["stars"],
+          },
+        ],
+      }),
+    }),
+  );
+  await page.route("**/api/v1/goals/goal-1/mastery", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        concepts: [
+          {
+            concept_id: "c1",
+            mastery_state: "needs_review",
+            mastery_score: 0.3,
+          },
+          { concept_id: "c2", mastery_state: "mastered", mastery_score: 0.9 },
+        ],
+        assessment_history: [],
+      }),
+    }),
+  );
+  await page.addInitScript(() => {
+    localStorage.setItem("meroguru:theme", "dark");
+    document.documentElement.dataset.theme = "dark";
+  });
+  await page.goto("/goals/goal-1/roadmap");
+  await expect(page.getByText("A little review will help.")).toBeVisible();
+  await page
+    .getByRole("button", { name: /Coming up How stars evolve/ })
+    .click();
+  await expect(page.locator(".path-preview h2")).toHaveText("How stars evolve");
+  await expect(page.locator(".path-preview .button")).toHaveAttribute(
+    "href",
+    "/lessons/lesson-2?goal=goal-1",
+  );
+  await page.screenshot({
+    path: "test-results/roadmap-desktop.png",
+    fullPage: true,
+  });
+  await page.setViewportSize({ width: 400, height: 900 });
+  expect(
+    await page.evaluate(() => document.documentElement.scrollWidth),
+  ).toBeLessThanOrEqual(400);
+  expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
+  await page
+    .getByRole("link", { name: "Progress", exact: true })
+    .last()
+    .click();
+  await page.getByRole("button", { name: "Needs review", exact: true }).click();
+  await expect(page.locator(".mastery-list article")).toHaveCount(1);
+  await expect(page.locator(".mastery-list")).toContainText(
+    "Reading the night sky",
+  );
 });

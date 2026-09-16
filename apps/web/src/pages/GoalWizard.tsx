@@ -218,6 +218,20 @@ export function GoalWizard() {
             </fieldset>
           </>
         )}
+        {step === 1 && (
+          <aside className="rhythm-preview" aria-live="polite">
+            <span className="eyebrow">Your weekly rhythm</span>
+            <strong>
+              {draft.minutes_per_day * draft.study_days.length} minutes of
+              planned learning
+            </strong>
+            <p>
+              {draft.study_days.length} study days ×{" "}
+              {draft.minutes_per_day || 0} minutes. Your plan will be built
+              around this commitment.
+            </p>
+          </aside>
+        )}
         {step === 2 && (
           <>
             <h3>{draft.title}</h3>

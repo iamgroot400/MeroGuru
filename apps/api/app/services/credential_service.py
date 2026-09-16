@@ -11,7 +11,7 @@ from packages.ai_providers.base import AIProvider
 from packages.ai_providers.registry import build_provider
 
 
-AI_PROVIDERS = {"openai", "anthropic", "groq", "openai_compatible", "ollama"}
+AI_PROVIDERS = {"openai", "anthropic", "groq", "gemini", "openai_compatible", "ollama"}
 
 
 def create_credential(db: Session, payload: CredentialCreate) -> ProviderCredential:

@@ -1,12 +1,75 @@
-import { useState, type FormEvent } from "react";
-import { Link, useParams } from "react-router-dom";
-import { ExternalLink } from "lucide-react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
+import { Link, useParams, useSearchParams } from "react-router-dom";
+import {
+  ArrowLeft,
+  ArrowRight,
+  BookOpen,
+  Check,
+  CheckCircle2,
+  ExternalLink,
+  Flag,
+  LockKeyhole,
+  PencilLine,
+  Target,
+  XCircle,
+} from "lucide-react";
 import { idPath, optional, post, request } from "../api/client";
 import type { Assessment, Attempt, Lesson, Resource } from "../api/types";
 import { useAsync } from "../hooks";
-import { Empty, ErrorState, Loading, Markdown, PageHeading, Time } from "../components";
+import {
+  Empty,
+  ErrorState,
+  Loading,
+  Markdown,
+  PageHeading,
+  Time,
+} from "../components";
 import { percent, safeUrl } from "../utils";
 import { normalizeLesson } from "../api/adapters";
+
+type Draft = {
+  step: number;
+  learned: boolean;
+  practiced: boolean;
+  notes: string;
+  answers: Record<string, string>;
+  passedId?: string;
+  feedbackSaved: boolean;
+  confidence: string;
+};
+const fresh: Draft = {
+  step: 0,
+  learned: false,
+  practiced: false,
+  notes: "",
+  answers: {},
+  feedbackSaved: false,
+  confidence: "",
+};
+function readDraft(id: string): Draft {
+  try {
+    const raw = JSON.parse(
+      sessionStorage.getItem("meroguru:lesson:" + id) || "null",
+    );
+    return raw && typeof raw === "object"
+      ? {
+          ...fresh,
+          ...raw,
+          step: Math.max(0, Math.min(3, Number(raw.step) || 0)),
+          answers:
+            raw.answers && typeof raw.answers === "object" ? raw.answers : {},
+        }
+      : { ...fresh };
+  } catch {
+    return { ...fresh };
+  }
+}
+const stages = [
+  { name: "Learn", icon: BookOpen, description: "Explore the idea" },
+  { name: "Practice", icon: PencilLine, description: "Try it yourself" },
+  { name: "Check", icon: Target, description: "Test your understanding" },
+  { name: "Reflect", icon: Flag, description: "Save your progress" },
+];
 
 function ResourceLink({ resource }: { resource: Resource }) {
   const url = safeUrl(resource.url);
@@ -21,16 +84,44 @@ function ResourceLink({ resource }: { resource: Resource }) {
         {resource.title || "Learning resource"}
         <small>{new URL(url).hostname} · Opens in a new tab</small>
       </span>
-      <ExternalLink size={18} aria-hidden="true" />
+      <ExternalLink size={18} />
     </a>
   ) : (
     <p className="notice">
-      {resource.title}: this source has no usable web link.
+      {resource.title}: no usable source link was supplied.
     </p>
   );
 }
-function Quiz({ lessonId }: { lessonId: string }) {
-  const state = useAsync(`assessment-${lessonId}`, (signal) =>
+
+function AnimatedScore({ target }: { target: number }) {
+  const [shown, setShown] = useState(0);
+  useEffect(() => {
+    let frame: number;
+    const start = performance.now();
+    const duration = 700;
+    const tick = (now: number) => {
+      const progress = Math.min(1, (now - start) / duration);
+      setShown(Math.round(target * (1 - Math.pow(1 - progress, 3))));
+      if (progress < 1) frame = requestAnimationFrame(tick);
+    };
+    frame = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(frame);
+  }, [target]);
+  return <>{shown}%</>;
+}
+
+export function LessonPage() {
+  const { lessonId = "" } = useParams();
+  return <LessonSession key={lessonId} lessonId={lessonId} />;
+}
+function LessonSession({ lessonId }: { lessonId: string }) {
+  const [search] = useSearchParams();
+  const state = useAsync("lesson-" + lessonId, (signal) =>
+    request<Lesson>(`/lessons/${idPath(lessonId)}`, { signal }).then(
+      normalizeLesson,
+    ),
+  );
+  const assessment = useAsync("quiz-" + lessonId, (signal) =>
     optional<Assessment>(
       `/lessons/${idPath(lessonId)}/assessment`,
       signal,
@@ -46,372 +137,734 @@ function Quiz({ lessonId }: { lessonId: string }) {
         : null,
     ),
   );
-  const [answers, setAnswers] = useState<Record<string, string>>({}),
-    [busy, setBusy] = useState(false),
+  const [draft, setDraft] = useState<Draft>(() => readDraft(lessonId));
+  const [question, setQuestion] = useState(0),
+    [result, setResult] = useState<Attempt | null>(null),
+    [busy, setBusy] = useState(""),
     [error, setError] = useState(""),
-    [result, setResult] = useState<Attempt | null>(null);
-  const submit = async (e: FormEvent) => {
+    [finished, setFinished] = useState(false);
+  const heading = useRef<HTMLHeadingElement>(null);
+  const patch = (value: Partial<Draft>) =>
+    setDraft((d) => ({ ...d, ...value }));
+  useEffect(() => {
+    try {
+      sessionStorage.setItem(
+        "meroguru:lesson:" + lessonId,
+        JSON.stringify(draft),
+      );
+    } catch {
+      /* Session remains usable when storage is unavailable. */
+    }
+  }, [draft, lessonId]);
+  useEffect(() => {
+    heading.current?.focus();
+  }, [draft.step, question]);
+  const lesson = state.data;
+  const completed =
+    finished || !!lesson?.completed_at || lesson?.status === "completed";
+  const passed = !!assessment.data && draft.passedId === assessment.data.id;
+  const unlocked = completed
+    ? 3
+    : passed
+      ? 3
+      : draft.practiced
+        ? 2
+        : draft.learned
+          ? 1
+          : 0;
+  const step = Math.min(draft.step, unlocked);
+  const goalId = lesson?.goal_id || search.get("goal") || undefined;
+  const back = goalId ? `/goals/${idPath(goalId)}/roadmap` : "/";
+  const go = (index: number) => {
+    patch({ step: index });
+    setError("");
+  };
+  const quiz = assessment.data;
+  const q = quiz?.questions[question];
+  const submitQuiz = async (e: FormEvent) => {
     e.preventDefault();
-    if (!state.data) return;
-    if (state.data.questions.some((q) => !answers[q.id]?.trim())) {
-      setError("Answer every question before checking your understanding.");
+    if (!quiz) return;
+    if (
+      quiz.questions.some((item) => !draft.answers[item.id]?.trim()) ||
+      !draft.confidence
+    ) {
+      setError(
+        "Answer each question and choose your confidence before submitting.",
+      );
       return;
     }
-    setBusy(true);
+    setBusy("quiz");
     setError("");
     try {
-      setResult(
-        await post<Attempt>(`/assessments/${idPath(state.data.id)}/attempts`, {
-          answers,
-        }),
+      const attempt = await post<Attempt>(
+        `/assessments/${idPath(quiz.id)}/attempts`,
+        { answers: draft.answers, confidence: Number(draft.confidence) },
       );
+      setResult(attempt);
+      const success =
+        attempt.passed ??
+        (attempt.score != null && attempt.score >= (quiz.passing_score ?? 0.7));
+      patch({ passedId: success ? quiz.id : undefined });
     } catch (e) {
       setError(
-        e instanceof Error ? e.message : "Could not submit your answers.",
+        e instanceof Error ? e.message : "Your answers could not be saved.",
       );
     } finally {
-      setBusy(false);
+      setBusy("");
     }
   };
+  const finish = async () => {
+    if (!passed || !draft.feedbackSaved || !draft.learned || !draft.practiced)
+      return;
+    setBusy("complete");
+    setError("");
+    try {
+      await post(`/lessons/${idPath(lessonId)}/complete`);
+      setFinished(true);
+      try {
+        sessionStorage.removeItem("meroguru:lesson:" + lessonId);
+      } catch {}
+    } catch (e) {
+      setError(
+        e instanceof Error ? e.message : "Your progress could not be saved.",
+      );
+    } finally {
+      setBusy("");
+    }
+  };
+  if (state.loading) return <Loading>Preparing your learning session…</Loading>;
+  if (state.error)
+    return <ErrorState message={state.error} retry={state.reload} />;
+  if (!lesson) return <Empty title="This lesson is not available." />;
+  const resources = lesson.resources || [];
+  const stageDone = [
+    draft.learned,
+    draft.practiced,
+    passed,
+    draft.feedbackSaved,
+  ];
   return (
-    <section className="lesson-section">
-      <h2>Check your understanding</h2>
-      {state.loading ? (
-        <Loading>Loading your quiz…</Loading>
-      ) : state.error ? (
-        <ErrorState message={state.error} retry={state.reload} />
-      ) : !state.data?.questions?.length ? (
-        <Empty
-          title="No quiz is available yet."
-          action={
-            <button className="secondary" onClick={state.reload}>
-              Check again
-            </button>
-          }
-        >
-          You can still work through the lesson and practice task.
-        </Empty>
-      ) : result ? (
-        <div className="quiz-result" role="status">
-          <h3>
-            {result.score == null
-              ? "Answers submitted"
-              : `You scored ${percent(result.score)}%`}
-          </h3>
-          <p className="prose">
-            {result.feedback ||
-              "Your answers have been recorded. Keep practicing to strengthen your understanding."}
-          </p>
-          {result.explanations &&
-            state.data?.questions.map((q) => (
-              <div key={q.id}>
-                <h3>{q.prompt}</h3>
-                <p>
-                  {result.per_question?.[q.id] ? "Correct" : "Keep practicing"}
-                </p>
-                <p className="prose">{result.explanations?.[q.id]}</p>
-              </div>
-            ))}
-          <button
-            className="secondary"
-            onClick={() => {
-              setResult(null);
-              setAnswers({});
-            }}
-          >
-            Practice again
-          </button>
+    <div className="guided-session">
+      <Link className="text-link" to={back}>
+        <ArrowLeft size={16} />
+        Back to your roadmap
+      </Link>
+      <PageHeading
+        title={lesson.title || "Your lesson"}
+        action={<Time value={lesson.estimated_minutes} />}
+      >
+        One idea at a time. Build understanding through doing.
+      </PageHeading>
+      {completed && (
+        <div className="session-success" role="status">
+          <CheckCircle2 size={25} />
+          <div>
+            <strong>Lesson completed</strong>
+            <p>You can revisit the material or return to your roadmap.</p>
+          </div>
+          <Link className="button secondary" to={back}>
+            View roadmap
+          </Link>
         </div>
-      ) : (
-        <form onSubmit={submit}>
-          {state.data.questions.map((q, i) => (
-            <fieldset className="question" key={q.id}>
-              <legend>
-                {i + 1}. {q.prompt}
-              </legend>
-              {q.options?.length ? (
-                q.options.map((option, j) => {
-                  const value = typeof option === "string" ? option : option.id;
-                  const text =
-                    typeof option === "string" ? option : option.text;
-                  return (
-                    <label className="answer" key={j}>
-                      <input
-                        type="radio"
-                        name={`question-${q.id}`}
-                        required
-                        checked={answers[q.id] === value}
-                        disabled={busy}
-                        value={value}
-                        onChange={() =>
-                          setAnswers((old) => ({ ...old, [q.id]: value }))
-                        }
-                      />
-                      {text}
-                    </label>
-                  );
-                })
-              ) : (
-                <>
-                  <label className="sr-only" htmlFor={`answer-${q.id}`}>
-                    Your answer to question {i + 1}
-                  </label>
-                  <textarea
-                    id={`answer-${q.id}`}
-                    rows={3}
-                    required
-                    disabled={busy}
-                    value={answers[q.id] || ""}
-                    onChange={(e) =>
-                      setAnswers((old) => ({ ...old, [q.id]: e.target.value }))
-                    }
-                  />
-                </>
-              )}
-            </fieldset>
-          ))}
-          {error && <ErrorState message={error} />}
-          <button disabled={busy}>
-            {busy ? "Checking answers…" : "Check my answers"}
-          </button>
-        </form>
       )}
-    </section>
+      <div className="study-layout">
+        <aside className="session-outline" aria-label="Lesson progress">
+          <h2>Your session</h2>
+          <ol>
+            {stages.map((stage, i) => {
+              const Icon = stage.icon;
+              return (
+                <li key={stage.name}>
+                  <button
+                    className={`stage-button ${step === i ? "selected" : ""}`}
+                    aria-current={step === i ? "step" : undefined}
+                    disabled={i > unlocked || !!busy}
+                    onClick={() => go(i)}
+                  >
+                    <span className="stage-icon">
+                      {stageDone[i] || completed ? (
+                        <Check size={18} />
+                      ) : i > unlocked ? (
+                        <LockKeyhole size={16} />
+                      ) : (
+                        <Icon size={18} />
+                      )}
+                    </span>
+                    <span>
+                      <strong>{stage.name}</strong>
+                      <small>{stage.description}</small>
+                    </span>
+                  </button>
+                </li>
+              );
+            })}
+          </ol>
+          <progress
+            max={4}
+            value={completed ? 4 : stageDone.filter(Boolean).length}
+            aria-label="Lesson activities completed"
+          />
+          <p>
+            {completed ? 4 : stageDone.filter(Boolean).length} of 4 activities
+            complete
+          </p>
+          <div className="session-objective">
+            <Target size={19} />
+            <h3>Your objective</h3>
+            <p>{lesson.objective || "No objective has been supplied yet."}</p>
+          </div>
+        </aside>
+        <div className="session-workspace">
+          <div className="session-section-heading">
+            <span>Step {step + 1} of 4</span>
+            <h2 tabIndex={-1} ref={heading}>
+              {
+                [
+                  "Let’s explore the idea.",
+                  "Make the idea your own.",
+                  "Check your understanding.",
+                  "Reflect on your session.",
+                ][step]
+              }
+            </h2>
+          </div>
+          {error && <ErrorState message={error} />}
+          {step === 0 && (
+            <>
+              <div className="study-content">
+                {lesson.explanation ? (
+                  <Markdown text={lesson.explanation} />
+                ) : (
+                  <Empty
+                    title="The explanation is not ready."
+                    action={<button onClick={state.reload}>Check again</button>}
+                  />
+                )}
+              </div>
+              {resources.length > 0 && (
+                <section className="study-resources">
+                  <h3>Go a little deeper</h3>
+                  {resources.map((r, i) => (
+                    <ResourceLink key={i} resource={r} />
+                  ))}
+                </section>
+              )}
+              <details className="source-disclosure">
+                <summary>
+                  Sources & further reading ({lesson.citations?.length || 0})
+                </summary>
+                {lesson.citations?.length ? (
+                  lesson.citations.map((r, i) => (
+                    <ResourceLink key={i} resource={r} />
+                  ))
+                ) : (
+                  <p>No source citations were supplied for this lesson.</p>
+                )}
+              </details>
+              <div className="session-footer">
+                <p>Ready to try this yourself?</p>
+                <button
+                  disabled={!lesson.explanation}
+                  onClick={() => {
+                    patch({ learned: true, step: 1 });
+                  }}
+                >
+                  Continue to practice
+                  <ArrowRight size={17} />
+                </button>
+              </div>
+            </>
+          )}
+          {step === 1 && (
+            <>
+              <section className="practice-brief">
+                <PencilLine size={24} />
+                <h3>Your practice task</h3>
+                {lesson.practice_task ? (
+                  <Markdown text={lesson.practice_task} />
+                ) : (
+                  <p>
+                    No practice task was supplied. Write down how you would
+                    apply the lesson.
+                  </p>
+                )}
+              </section>
+              <label htmlFor="practice-notes">Your working notes</label>
+              <textarea
+                id="practice-notes"
+                rows={7}
+                value={draft.notes}
+                onChange={(e) => patch({ notes: e.target.value })}
+                placeholder="Try the task, explain the idea in your own words, or note where you got stuck."
+              />
+              <p className="field-help">
+                Notes stay in this browser tab. They are not graded or sent to
+                the AI.
+              </p>
+              <label className="task-check">
+                <input
+                  type="checkbox"
+                  checked={draft.practiced}
+                  onChange={(e) => patch({ practiced: e.target.checked })}
+                />
+                I’ve attempted the practice task.
+              </label>
+              <div className="session-footer">
+                <button className="secondary" onClick={() => go(0)}>
+                  Back to explanation
+                </button>
+                <button disabled={!draft.practiced} onClick={() => go(2)}>
+                  Continue to quiz
+                  <ArrowRight size={17} />
+                </button>
+              </div>
+            </>
+          )}
+          {step === 2 &&
+            (assessment.loading ? (
+              <Loading>Preparing your questions…</Loading>
+            ) : assessment.error ? (
+              <ErrorState
+                message={assessment.error}
+                retry={assessment.reload}
+              />
+            ) : !quiz?.questions.length ? (
+              <Empty
+                title="Your quiz isn’t available yet."
+                action={
+                  <button className="secondary" onClick={assessment.reload}>
+                    Check again
+                  </button>
+                }
+              >
+                Your reading and practice are saved in this tab. A quiz is
+                required to finish this session.
+              </Empty>
+            ) : result ? (
+              <section
+                className={`quiz-outcome ${passed ? "passed celebrate" : "review"}`}
+              >
+                <span className="outcome-score">
+                  {result.score == null ? (
+                    "Submitted"
+                  ) : (
+                    <AnimatedScore target={percent(result.score)} />
+                  )}
+                </span>
+                <h3>
+                  {passed
+                    ? "You’re ready to reflect."
+                    : "Let’s give this another look."}
+                </h3>
+                <p>
+                  {passed
+                    ? "Your answers met this quiz’s passing score. Mastery builds through evidence over time."
+                    : `Review the explanations below, then try again. This quiz requires ${percent(quiz.passing_score ?? 0.7)}% to continue.`}
+                </p>
+                <div className="answer-review">
+                  {quiz.questions.map((item, i) => {
+                    const correct = !!result.per_question?.[item.id];
+                    return (
+                      <article
+                        key={item.id}
+                        className="review-reveal"
+                        style={{ animationDelay: `${i * 80}ms` }}
+                      >
+                        <span
+                          className={
+                            correct ? "answer-status correct" : "answer-status"
+                          }
+                        >
+                          {correct ? (
+                            <CheckCircle2 size={14} />
+                          ) : (
+                            <XCircle size={14} />
+                          )}
+                          {correct ? "Correct" : "Review"}
+                        </span>
+                        <h4>
+                          {i + 1}. {item.prompt}
+                        </h4>
+                        <p>Your answer: {draft.answers[item.id]}</p>
+                        {result.explanations?.[item.id] && (
+                          <Markdown text={result.explanations[item.id]} />
+                        )}
+                      </article>
+                    );
+                  })}
+                </div>
+                <div className="session-footer">
+                  <button className="secondary" onClick={() => go(0)}>
+                    Revisit explanation
+                  </button>
+                  {passed ? (
+                    <button onClick={() => go(3)}>
+                      Continue to reflection
+                      <ArrowRight size={17} />
+                    </button>
+                  ) : (
+                    <button
+                      onClick={() => {
+                        setResult(null);
+                        setQuestion(0);
+                        patch({ answers: {}, confidence: "" });
+                      }}
+                    >
+                      Try the quiz again
+                    </button>
+                  )}
+                </div>
+              </section>
+            ) : passed ? (
+              <div className="quiz-outcome passed">
+                <CheckCircle2 />
+                <h3>This quiz is complete.</h3>
+                <p>Your passing result is saved for this session.</p>
+                <button onClick={() => go(3)}>Continue to reflection</button>
+              </div>
+            ) : (
+              <form onSubmit={submitQuiz}>
+                <div
+                  className="quiz-progress-bar"
+                  role="progressbar"
+                  aria-valuemin={0}
+                  aria-valuemax={quiz.questions.length}
+                  aria-valuenow={
+                    quiz.questions.filter((item) => draft.answers[item.id])
+                      .length
+                  }
+                >
+                  <span
+                    style={{
+                      width: `${(quiz.questions.filter((item) => draft.answers[item.id]).length / quiz.questions.length) * 100}%`,
+                    }}
+                  />
+                </div>
+                <div className="question-track" aria-label="Quiz questions">
+                  {quiz.questions.map((item, i) => (
+                    <button
+                      key={item.id}
+                      type="button"
+                      className={
+                        question === i
+                          ? "current"
+                          : draft.answers[item.id]
+                            ? "answered"
+                            : ""
+                      }
+                      aria-label={`Question ${i + 1}${draft.answers[item.id] ? ", answered" : ""}`}
+                      aria-current={question === i ? "step" : undefined}
+                      onClick={() => {
+                        setQuestion(i);
+                        setError("");
+                      }}
+                      disabled={!!busy}
+                    >
+                      {draft.answers[item.id] && question !== i ? (
+                        <Check size={16} />
+                      ) : (
+                        i + 1
+                      )}
+                    </button>
+                  ))}
+                </div>
+                {q && (
+                  <fieldset className="guided-question question-enter" key={q.id}>
+                    <legend>
+                      {question + 1}. {q.prompt}
+                    </legend>
+                    {q.options?.length ? (
+                      q.options.map((option, i) => {
+                        const value =
+                          typeof option === "string" ? option : option.id;
+                        const text =
+                          typeof option === "string" ? option : option.text;
+                        const selected = draft.answers[q.id] === value;
+                        return (
+                          <label
+                            className={`answer answer-option${selected ? " selected" : ""}`}
+                            key={i}
+                          >
+                            <input
+                              type="radio"
+                              name={q.id}
+                              checked={selected}
+                              disabled={!!busy}
+                              onChange={() =>
+                                patch({
+                                  answers: { ...draft.answers, [q.id]: value },
+                                })
+                              }
+                            />
+                            <span className="option-letter" aria-hidden="true">
+                              {selected ? (
+                                <Check size={16} />
+                              ) : (
+                                String.fromCharCode(65 + i)
+                              )}
+                            </span>
+                            <span>{text}</span>
+                          </label>
+                        );
+                      })
+                    ) : (
+                      <>
+                        <label htmlFor="short-answer">Your answer</label>
+                        <textarea
+                          id="short-answer"
+                          rows={4}
+                          value={draft.answers[q.id] || ""}
+                          disabled={!!busy}
+                          onChange={(e) =>
+                            patch({
+                              answers: {
+                                ...draft.answers,
+                                [q.id]: e.target.value,
+                              },
+                            })
+                          }
+                        />
+                      </>
+                    )}
+                  </fieldset>
+                )}
+                {question === quiz.questions.length - 1 && (
+                  <div className="quiz-confidence">
+                    <label htmlFor="quiz-confidence">
+                      How confident are you in your answers?
+                    </label>
+                    <select
+                      id="quiz-confidence"
+                      value={draft.confidence}
+                      disabled={!!busy}
+                      onChange={(e) => patch({ confidence: e.target.value })}
+                    >
+                      <option value="">Choose your confidence</option>
+                      <option value="0.25">Still unsure</option>
+                      <option value="0.5">Somewhat confident</option>
+                      <option value="0.75">Confident</option>
+                      <option value="1">Very confident</option>
+                    </select>
+                    <p className="field-help">
+                      There’s no right confidence level. An honest answer helps
+                      put your result in context.
+                    </p>
+                  </div>
+                )}
+                <div className="session-footer">
+                  <button
+                    className="secondary"
+                    type="button"
+                    disabled={!!busy}
+                    onClick={() =>
+                      question ? setQuestion(question - 1) : go(1)
+                    }
+                  >
+                    {question ? "Previous question" : "Back to practice"}
+                  </button>
+                  {question < quiz.questions.length - 1 ? (
+                    <button
+                      type="button"
+                      disabled={!q || !draft.answers[q.id]?.trim() || !!busy}
+                      onClick={() => setQuestion(question + 1)}
+                    >
+                      Next question
+                      <ArrowRight size={17} />
+                    </button>
+                  ) : (
+                    <button
+                      disabled={
+                        !!busy ||
+                        !draft.confidence ||
+                        quiz.questions.some(
+                          (item) => !draft.answers[item.id]?.trim(),
+                        )
+                      }
+                    >
+                      {busy === "quiz"
+                        ? "Checking answers…"
+                        : "Check my answers"}
+                    </button>
+                  )}
+                </div>
+              </form>
+            ))}
+          {step === 3 && (
+            <>
+              <Reflection
+                lessonId={lessonId}
+                saved={draft.feedbackSaved}
+                onSaved={() => patch({ feedbackSaved: true })}
+              />
+              <div className="completion-guide">
+                <h3>What happens next?</h3>
+                <p>
+                  Your quiz result updates your learning history. Additional AI
+                  support may be analyzed in the background. Your roadmap shows
+                  your next available lesson and any concepts to revisit.
+                </p>
+              </div>
+              <div className="session-footer">
+                <Link className="text-link" to={back}>
+                  Return to roadmap
+                </Link>
+                <button
+                  disabled={
+                    !!busy ||
+                    completed ||
+                    !passed ||
+                    !draft.feedbackSaved ||
+                    !draft.learned ||
+                    !draft.practiced
+                  }
+                  onClick={() => void finish()}
+                >
+                  {completed
+                    ? "Lesson completed"
+                    : busy === "complete"
+                      ? "Saving progress…"
+                      : "Complete lesson"}
+                  <CheckCircle2 size={18} />
+                </button>
+              </div>
+            </>
+          )}
+        </div>
+      </div>
+    </div>
   );
 }
-function Feedback({ lessonId }: { lessonId: string }) {
+function Reflection({
+  lessonId,
+  saved,
+  onSaved,
+}: {
+  lessonId: string;
+  saved: boolean;
+  onSaved: () => void;
+}) {
   const [difficulty, setDifficulty] = useState(""),
     [usefulness, setUsefulness] = useState(""),
     [confidence, setConfidence] = useState(""),
+    [minutes, setMinutes] = useState(""),
     [busy, setBusy] = useState(false),
-    [error, setError] = useState(""),
-    [saved, setSaved] = useState(false),
-    [timeSpent, setTimeSpent] = useState("");
+    [error, setError] = useState("");
   const submit = async (e: FormEvent) => {
     e.preventDefault();
     setBusy(true);
     setError("");
     try {
       await post(`/lessons/${idPath(lessonId)}/feedback`, {
-        difficulty:
-          Number(difficulty) <= 2
-            ? "too_easy"
-            : Number(difficulty) === 3
-              ? "just_right"
-              : "too_difficult",
+        difficulty,
         usefulness: Number(usefulness),
-        confidence: (Number(confidence) - 1) / 4,
-        time_spent_minutes: Number(timeSpent),
+        confidence: Number(confidence),
+        time_spent_minutes: Number(minutes),
       });
-      setSaved(true);
+      onSaved();
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Could not save feedback.");
+      setError(e instanceof Error ? e.message : "Feedback could not be saved.");
     } finally {
       setBusy(false);
     }
   };
-  return (
-    <section className="feedback">
-      <h2>How did this feel?</h2>
-      <p>Your feedback helps the next lesson fit you better.</p>
-      {saved ? (
-        <p role="status">
-          Feedback saved. Thank you for reflecting on your learning.
-        </p>
-      ) : (
-        <form onSubmit={submit}>
-          <div className="feedback-grid">
-            {[
-              {
-                id: "difficulty",
-                label: "Difficulty",
-                value: difficulty,
-                set: setDifficulty,
-                options: [
-                  "Very easy",
-                  "Easy",
-                  "About right",
-                  "Hard",
-                  "Very hard",
-                ],
-              },
-              {
-                id: "usefulness",
-                label: "Usefulness",
-                value: usefulness,
-                set: setUsefulness,
-                options: [
-                  "Not useful",
-                  "Slightly useful",
-                  "Somewhat useful",
-                  "Useful",
-                  "Very useful",
-                ],
-              },
-              {
-                id: "confidence",
-                label: "Confidence",
-                value: confidence,
-                set: setConfidence,
-                options: [
-                  "Not confident",
-                  "A little confident",
-                  "Somewhat confident",
-                  "Confident",
-                  "Very confident",
-                ],
-              },
-            ].map((field) => (
-              <div key={field.id}>
-                <label htmlFor={field.id}>{field.label}</label>
-                <select
-                  id={field.id}
-                  required
-                  value={field.value}
-                  disabled={busy}
-                  onChange={(e) => field.set(e.target.value)}
-                >
-                  <option value="">Choose a rating</option>
-                  {field.options.map((option, i) => (
-                    <option key={option} value={i + 1}>
-                      {option}
-                    </option>
-                  ))}
-                </select>
-              </div>
-            ))}
-          </div>
-          {error && <ErrorState message={error} />}
-          <label htmlFor="time-spent">Time spent (minutes)</label>
-          <input
-            id="time-spent"
+  return saved ? (
+    <div className="reflection-saved" role="status">
+      <CheckCircle2 size={28} />
+      <h3>Your reflection is saved.</h3>
+      <p>
+        You’ve worked through the session. Save its completion to update your
+        roadmap.
+      </p>
+    </div>
+  ) : (
+    <form onSubmit={submit}>
+      <p>
+        Notice what clicked and what took effort. Your reflection becomes part
+        of your learning history.
+      </p>
+      <fieldset>
+        <legend>How did this lesson feel?</legend>
+        <div className="reflection-options">
+          {[
+            ["too_easy", "Too easy"],
+            ["just_right", "About right"],
+            ["too_difficult", "Challenging"],
+          ].map(([value, label]) => (
+            <label className="choice" key={value}>
+              <input
+                type="radio"
+                name="difficulty"
+                required
+                checked={difficulty === value}
+                disabled={busy}
+                onChange={() => setDifficulty(value)}
+              />
+              {label}
+            </label>
+          ))}
+        </div>
+      </fieldset>
+      <div className="form-grid">
+        <div>
+          <label htmlFor="usefulness">How useful was it?</label>
+          <select
+            id="usefulness"
             required
-            type="number"
-            min={0}
-            max={1440}
-            step={1}
-            value={timeSpent}
+            value={usefulness}
             disabled={busy}
-            onChange={(e) => setTimeSpent(e.target.value)}
-          />
-          <div className="button-row">
-            <button className="secondary" disabled={busy}>
-              {busy ? "Saving…" : "Save feedback"}
-            </button>
-          </div>
-        </form>
-      )}
-    </section>
-  );
-}
-export function LessonPage() {
-  const { lessonId = "" } = useParams();
-  return <LessonDetail key={lessonId} lessonId={lessonId} />;
-}
-function LessonDetail({ lessonId }: { lessonId: string }) {
-  const state = useAsync(`lesson-${lessonId}`, (signal) =>
-    request<Lesson>(`/lessons/${idPath(lessonId)}`, { signal }),
-  );
-  const [busy, setBusy] = useState(false),
-    [complete, setComplete] = useState(false),
-    [error, setError] = useState("");
-  if (state.loading) return <Loading>Getting your lesson ready…</Loading>;
-  if (state.error)
-    return <ErrorState message={state.error} retry={state.reload} />;
-  if (!state.data) return <Empty title="This lesson is not available." />;
-  const lesson = normalizeLesson(state.data),
-    resources = lesson.resources || (lesson.resource ? [lesson.resource] : []);
-  const finish = async () => {
-    setBusy(true);
-    setError("");
-    try {
-      await post(`/lessons/${idPath(lessonId)}/complete`);
-      setComplete(true);
-    } catch (e) {
-      setError(
-        e instanceof Error ? e.message : "Could not complete your lesson.",
-      );
-    } finally {
-      setBusy(false);
-    }
-  };
-  return (
-    <div className="lesson-page">
-      <Link
-        className="text-link"
-        to={lesson.goal_id ? `/goals/${idPath(lesson.goal_id)}/roadmap` : "/"}
-      >
-        Back to your learning path
-      </Link>
-      <PageHeading
-        title={lesson.title || "Your lesson"}
-        action={<Time value={lesson.estimated_minutes} />}
+            onChange={(e) => setUsefulness(e.target.value)}
+          >
+            <option value="">Choose usefulness</option>
+            {[
+              "Not useful",
+              "Slightly useful",
+              "Somewhat useful",
+              "Useful",
+              "Very useful",
+            ].map((s, i) => (
+              <option key={s} value={i + 1}>
+                {s}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div>
+          <label htmlFor="reflection-confidence">
+            Confidence after practice
+          </label>
+          <select
+            id="reflection-confidence"
+            required
+            value={confidence}
+            disabled={busy}
+            onChange={(e) => setConfidence(e.target.value)}
+          >
+            <option value="">Choose confidence</option>
+            <option value="0.25">Still unsure</option>
+            <option value="0.5">Somewhat confident</option>
+            <option value="0.75">Confident</option>
+            <option value="1">Very confident</option>
+          </select>
+        </div>
+      </div>
+      <label htmlFor="time-spent">Time spent (minutes)</label>
+      <input
+        id="time-spent"
+        type="number"
+        min={1}
+        max={1440}
+        step={1}
+        required
+        value={minutes}
+        disabled={busy}
+        onChange={(e) => setMinutes(e.target.value)}
       />
-      <section className="objective">
-        <h2>By the end of this lesson</h2>
-        <p>{lesson.objective || "The objective is not available yet."}</p>
-      </section>
-      <section className="lesson-section">
-        <h2>Let’s explore</h2>
-        {lesson.explanation ? (
-          <Markdown text={lesson.explanation} />
-        ) : (
-          <p className="muted">An explanation has not been provided yet.</p>
-        )}
-      </section>
-      <section className="lesson-section">
-        <h2>Learn from a resource</h2>
-        {resources.length ? (
-          resources.map((r, i) => <ResourceLink key={i} resource={r} />)
-        ) : (
-          <p className="muted">
-            No resource has been attached to this lesson yet.
-          </p>
-        )}
-      </section>
-      <section className="practice">
-        <h2>Put it into practice</h2>
-        {lesson.practice_task ? (
-          <Markdown text={lesson.practice_task} />
-        ) : (
-          <p className="prose muted">No practice task has been provided yet.</p>
-        )}
-      </section>
-      <Quiz lessonId={lessonId} />
-      <section className="lesson-section citations">
-        <h2>Sources & further reading</h2>
-        {lesson.citations?.length ? (
-          lesson.citations.map((r, i) => <ResourceLink key={i} resource={r} />)
-        ) : (
-          <p className="muted">
-            No source citations were supplied for this lesson.
-          </p>
-        )}
-      </section>
-      <Feedback lessonId={lessonId} />
-      <div className="completion">
-        {error && <ErrorState message={error} />}
-        <p role="status">
-          {complete || lesson.completed_at || lesson.status === "completed"
-            ? "Lesson completed. Another step on your path."
-            : "Worked through the material? Mark this lesson complete."}
-        </p>
-        <button
-          disabled={
-            busy ||
-            complete ||
-            !!lesson.completed_at ||
-            lesson.status === "completed"
-          }
-          onClick={() => void finish()}
-        >
-          {busy
-            ? "Saving your progress…"
-            : complete || lesson.completed_at || lesson.status === "completed"
-              ? "Lesson completed"
-              : "Complete lesson"}
+      {error && <ErrorState message={error} />}
+      <div className="button-row">
+        <button className="secondary" disabled={busy}>
+          {busy ? "Saving…" : "Save reflection"}
         </button>
       </div>
-    </div>
+    </form>
   );
 }

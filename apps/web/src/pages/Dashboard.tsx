@@ -1,9 +1,20 @@
+import { useState } from "react";
+import { Recommendation } from "../Recommendation";
+import { normalizeConcepts } from "../api/adapters";
+import { lessonUrl } from "../learning";
 import { Link } from "react-router-dom";
 import { ArrowUpRight, Check, Plus, Sprout } from "lucide-react";
 import { useGoals } from "../context";
 import { useAsync } from "../hooks";
 import { optional, request, idPath } from "../api/client";
-import type { Credential, Goal, LessonSummary, Mastery, Plan } from "../api/types";
+import type {
+  Concept,
+  Credential,
+  Goal,
+  LessonSummary,
+  Mastery,
+  Plan,
+} from "../api/types";
 import {
   Badge,
   Empty,
@@ -17,13 +28,22 @@ import {
 import { completedInWeek, dayKey, weekDates } from "../utils";
 
 function CurrentStudy({ goal }: { goal: Goal }) {
+  const [selectedDay, setSelectedDay] = useState(dayKey(new Date()));
   const state = useAsync(
     `study-${goal.id}-${goal.plan_id}-${goal.active_plan_id}`,
     async (signal) => {
       const full = await request<Goal>(`/goals/${idPath(goal.id)}`, { signal });
       const planId = full.active_plan_id || full.plan_id;
       if (!planId) return null;
-      const [plan, today] = await Promise.all([
+      const [map, mastery, plan, today] = await Promise.all([
+        optional<Concept[] | { concepts: Concept[] }>(
+          `/goals/${idPath(goal.id)}/concept-map`,
+          signal,
+        ),
+        optional<Mastery | Mastery["concepts"]>(
+          `/goals/${idPath(goal.id)}/mastery`,
+          signal,
+        ),
         request<Plan>(`/plans/${idPath(planId)}`, { signal }),
         optional<
           LessonSummary | LessonSummary[] | { lessons: LessonSummary[] }
@@ -31,6 +51,8 @@ function CurrentStudy({ goal }: { goal: Goal }) {
       ]);
       return {
         plan,
+        concepts: normalizeConcepts(map),
+        mastery: Array.isArray(mastery) ? { concepts: mastery } : mastery,
         today: !today
           ? []
           : Array.isArray(today)
@@ -62,95 +84,118 @@ function CurrentStudy({ goal }: { goal: Goal }) {
     (l) => l.status === "completed" && !l.completed_at,
   );
   return (
-    <div className="dashboard-grid">
-      <section className="today-panel">
-        <div className="section-heading">
-          <h2>Today’s lesson</h2>
-          <span className="badge">{goal.title}</span>
-        </div>
-        {state.data.today.length ? (
-          state.data.today.map((lesson) => (
-            <div className="today-lesson" key={lesson.id}>
-              <Time value={lesson.estimated_minutes} />
-              <h3>{lesson.title || "Your next lesson"}</h3>
-              <p>One focused session. One step closer to your goal.</p>
-              <Link className="button" to={`/lessons/${idPath(lesson.id)}`}>
-                {lesson.status === "completed"
-                  ? "Review lesson"
-                  : "Start learning"}
-                <ArrowUpRight size={18} />
-              </Link>
-            </div>
-          ))
-        ) : (
-          <Empty title="A little breathing room">
-            No lesson is scheduled for today. Explore your roadmap or come back
-            on your next study day.
-          </Empty>
-        )}
-      </section>
-      <section className="week-panel">
-        <h2>This week</h2>
-        <p className="week-count">
-          <strong>{hasCompletionDates ? completed.length : "—"}</strong>{" "}
-          {hasCompletionDates
-            ? completed.length === 1
-              ? "lesson completed"
-              : "lessons completed"
-            : "Completion dates unavailable"}
-        </p>
-        <div className="week-days">
-          {weekDates().map((date) => {
-            const key = dayKey(date);
-            const count = completed.filter(
-              (l) => dayKey(new Date(l.completed_at!)) === key,
-            ).length;
-            return (
-              <div
-                key={key}
-                className={key === dayKey(new Date()) ? "is-today" : ""}
-              >
-                <span>
-                  {date
-                    .toLocaleDateString(undefined, { weekday: "short" })
-                    .slice(0, 1)}
-                </span>
-                <span
-                  className={`day-circle ${count ? "done" : ""}`}
-                  aria-label={`${date.toLocaleDateString()}: ${count} lessons completed`}
-                >
-                  {count ? "✓" : date.getDate()}
-                </span>
+    <>
+      <div className="dashboard-grid">
+        <section className="today-panel">
+          <div className="section-heading">
+            <h2>Today’s lesson</h2>
+            <span className="badge">{goal.title}</span>
+          </div>
+          {state.data.today.length ? (
+            state.data.today.map((lesson) => (
+              <div className="today-lesson" key={lesson.id}>
+                <Time value={lesson.estimated_minutes} />
+                <h3>{lesson.title || "Your next lesson"}</h3>
+                <p>One focused session. One step closer to your goal.</p>
+                <Link className="button" to={lessonUrl(lesson.id, goal.id)}>
+                  {lesson.status === "completed"
+                    ? "Review lesson"
+                    : "Start learning"}
+                  <ArrowUpRight size={18} />
+                </Link>
               </div>
-            );
-          })}
+            ))
+          ) : (
+            <Empty title="A little breathing room">
+              No lesson is scheduled for today. Explore your roadmap or come
+              back on your next study day.
+            </Empty>
+          )}
+        </section>
+        <section className="week-panel">
+          <h2>This week</h2>
+          <p className="week-count">
+            <strong>{hasCompletionDates ? completed.length : "—"}</strong>{" "}
+            {hasCompletionDates
+              ? completed.length === 1
+                ? "lesson completed"
+                : "lessons completed"
+              : "Completion dates unavailable"}
+          </p>
+          <div className="week-days">
+            {weekDates().map((date) => {
+              const key = dayKey(date);
+              const count = completed.filter(
+                (l) => dayKey(new Date(l.completed_at!)) === key,
+              ).length;
+              return (
+                <button
+                  type="button"
+                  aria-pressed={selectedDay === key}
+                  onClick={() => setSelectedDay(key)}
+                  key={key}
+                  className={key === dayKey(new Date()) ? "is-today" : ""}
+                >
+                  <span>
+                    {date
+                      .toLocaleDateString(undefined, { weekday: "short" })
+                      .slice(0, 1)}
+                  </span>
+                  <span
+                    className={`day-circle ${count ? "done" : ""}`}
+                    aria-label={`${date.toLocaleDateString()}: ${count} lessons completed`}
+                  >
+                    {count ? "✓" : date.getDate()}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+          <p className="week-detail" aria-live="polite">
+            {selectedDay}:{" "}
+            {completed
+              .filter((l) => dayKey(new Date(l.completed_at!)) === selectedDay)
+              .map((l) => l.title)
+              .join(", ") || "No completed lessons recorded."}
+          </p>
+          <p className="muted">
+            {hasCompletionDates
+              ? "Completed lessons for this goal, Monday through Sunday."
+              : "The API has not supplied dates for completed lessons, so a weekly total is not available."}
+          </p>
+          <Link className="text-link" to={`/goals/${idPath(goal.id)}/progress`}>
+            See your progress
+          </Link>
+        </section>
+        {state.data.plan.warnings?.map((warning, i) => (
+          <p className="notice full-width" key={i}>
+            {warning}
+          </p>
+        ))}
+        <div className="full-width">
+          {" "}
+          <Recommendation
+            goalId={goal.id}
+            lessons={state.data.plan.lessons}
+            concepts={state.data.concepts}
+            mastery={state.data.mastery}
+          />
         </div>
-        <p className="muted">
-          {hasCompletionDates
-            ? "Completed lessons for this goal, Monday through Sunday."
-            : "The API has not supplied dates for completed lessons, so a weekly total is not available."}
-        </p>
-        <Link className="text-link" to={`/goals/${idPath(goal.id)}/progress`}>
-          See your progress
-        </Link>
-      </section>
-      {state.data.plan.warnings?.map((warning, i) => (
-        <p className="notice full-width" key={i}>
-          {warning}
-        </p>
-      ))}
-      <section className="full-width">
-        <h2>On your learning path</h2>
-        {state.data.plan.lessons?.length ? (
-          state.data.plan.lessons
-            .filter((l) => l.status !== "completed" && !l.completed_at)
-            .slice(0, 3)
-            .map((lesson) => <LessonLink key={lesson.id} lesson={lesson} />)
-        ) : (
-          <p className="muted">Your plan has no lessons yet.</p>
-        )}
-      </section>
-    </div>
+        <section className="full-width">
+          <h2>On your learning path</h2>
+          {state.data.plan.lessons?.length ? (
+            state.data.plan.lessons
+              .filter((l) => l.status !== "completed" && !l.completed_at)
+              .slice(0, 3)
+              .map((lesson) => (
+                <LessonLink key={lesson.id} lesson={lesson} goalId={goal.id} />
+              ))
+          ) : (
+            <p className="muted">Your plan has no lessons yet.</p>
+          )}
+        </section>
+      </div>
+    </>
   );
 }
 function GoalCard({ goal }: { goal: Goal }) {
@@ -163,7 +208,9 @@ function GoalCard({ goal }: { goal: Goal }) {
   const concepts = Array.isArray(state.data)
     ? state.data
     : state.data?.concepts || [];
-  const mastered = concepts.filter((c) => c.mastery_state === "mastered").length;
+  const mastered = concepts.filter(
+    (c) => c.mastery_state === "mastered",
+  ).length;
   return (
     <article className="goal-card">
       <div className="goal-card-top">
@@ -178,7 +225,9 @@ function GoalCard({ goal }: { goal: Goal }) {
         <Link to={`/goals/${idPath(goal.id)}/roadmap`}>{goal.title}</Link>
       </h3>
       <p>{goal.description || "Your personal learning path."}</p>
-      {concepts.length > 0 ? (
+      {state.error ? (
+        <ErrorState message={state.error} retry={state.reload} />
+      ) : concepts.length > 0 ? (
         <MasteryBar mastered={mastered} total={concepts.length} />
       ) : (
         <p className="muted">
@@ -190,23 +239,23 @@ function GoalCard({ goal }: { goal: Goal }) {
         <span>per study day</span>
       </div>
       <div className="button-row">
-        <Link
-          className="text-link"
-          to={`/goals/${idPath(goal.id)}/roadmap`}
-        >
+        <Link className="text-link" to={`/goals/${idPath(goal.id)}/roadmap`}>
           Explore roadmap
         </Link>
-        <Link
-          className="text-link"
-          to={`/goals/${idPath(goal.id)}/progress`}
-        >
+        <Link className="text-link" to={`/goals/${idPath(goal.id)}/progress`}>
           View progress
         </Link>
       </div>
     </article>
   );
 }
-const AI_PROVIDER_IDS = ["openai", "anthropic", "groq", "openai_compatible", "ollama"];
+const AI_PROVIDER_IDS = [
+  "openai",
+  "anthropic",
+  "groq",
+  "openai_compatible",
+  "ollama",
+];
 
 function Onboarding() {
   const state = useAsync("onboarding-credentials", async (signal) => {

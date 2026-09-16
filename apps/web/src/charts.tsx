@@ -1,113 +1,158 @@
-// Minimal, dependency-free SVG charts. Kept intentionally simple (no charting
-// library) since this app renders only a handful of chart shapes; colors use
-// CSS custom properties so they follow the light/dark theme automatically.
-
-const WIDTH = 640;
-const HEIGHT = 180;
-const PAD = 28;
-
+import { useId, useState } from "react";
+type Point = { date: string; value: number };
+function HistoryChart({
+  points,
+  kind,
+}: {
+  points: Point[];
+  kind: "score" | "time";
+}) {
+  const [selected, setSelected] = useState<number | null>(null),
+    id = useId();
+  if (!points.length)
+    return (
+      <p className="muted">
+        {kind === "score"
+          ? "Complete a quiz to see your results here."
+          : "Save lesson feedback with time spent to see your study history."}
+      </p>
+    );
+  const index = Math.min(selected ?? points.length - 1, points.length - 1),
+    current = points[index];
+  const max =
+    kind === "score" ? 100 : Math.max(1, ...points.map((p) => p.value));
+  const x = (i: number) => 55 + (i * 530) / Math.max(points.length - 1, 1),
+    y = (v: number) => 155 - (v / max) * 125;
+  const label = (p: Point) =>
+    new Date(
+      p.date.length === 10 ? p.date + "T12:00:00" : p.date,
+    ).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+  return (
+    <div className="interactive-chart">
+      <svg
+        className="chart"
+        viewBox="0 0 640 195"
+        role="img"
+        aria-label={
+          kind === "score"
+            ? "Quiz scores in attempt order"
+            : "Recorded study minutes by date"
+        }
+      >
+        {[0, 0.5, 1].map((f) => (
+          <g key={f}>
+            <line
+              x1={55}
+              x2={600}
+              y1={y(f * max)}
+              y2={y(f * max)}
+              className="chart-gridline"
+            />
+            <text
+              x={43}
+              y={y(f * max) + 4}
+              textAnchor="end"
+              className="chart-axis-label"
+            >
+              {Math.round(f * max)}
+              {kind === "score" ? "%" : ""}
+            </text>
+          </g>
+        ))}
+        {kind === "score" ? (
+          <>
+            <path
+              className="chart-line"
+              fill="none"
+              d={points
+                .map((p, i) => (i ? "L" : "M") + x(i) + "," + y(p.value))
+                .join(" ")}
+            />
+            {points.map((p, i) => (
+              <circle
+                key={i}
+                className="chart-point"
+                cx={x(i)}
+                cy={y(p.value)}
+                r={i === index ? 7 : 3.5}
+              />
+            ))}
+          </>
+        ) : (
+          points.map((p, i) => (
+            <rect
+              key={i}
+              className="chart-bar"
+              x={55 + (i * 545) / points.length}
+              y={y(p.value)}
+              width={Math.max(2, 545 / points.length - 6)}
+              height={155 - y(p.value)}
+              rx={3}
+              opacity={i === index ? 1 : 0.45}
+            />
+          ))
+        )}
+        <text x={55} y={182} className="chart-axis-label">
+          {label(points[0])}
+        </text>
+        <text x={600} y={182} textAnchor="end" className="chart-axis-label">
+          {label(points[points.length - 1])}
+        </text>
+      </svg>
+      <div className="chart-inspector">
+        <div>
+          <label htmlFor={id}>
+            {kind === "score" ? "Explore an attempt" : "Explore a study day"}
+          </label>
+          <select
+            id={id}
+            value={index}
+            onChange={(e) => setSelected(Number(e.target.value))}
+          >
+            {points.map((p, i) => (
+              <option key={i} value={i}>
+                {kind === "score" ? "Attempt " + (i + 1) + " · " : ""}
+                {label(p)}
+              </option>
+            ))}
+          </select>
+        </div>
+        <p aria-live="polite">
+          <strong>
+            {Math.round(current.value)}
+            {kind === "score" ? "%" : " min"}
+          </strong>
+          <span>
+            {kind === "score"
+              ? "Recorded quiz score"
+              : "Time logged in feedback"}
+          </span>
+        </p>
+      </div>
+    </div>
+  );
+}
 export function ScoreTrendChart({
   points,
 }: {
   points: { date: string; score: number }[];
 }) {
-  if (points.length < 2) {
-    return (
-      <p className="muted">
-        Complete a few more quizzes to see your score trend here.
-      </p>
-    );
-  }
-  const innerW = WIDTH - PAD * 2;
-  const innerH = HEIGHT - PAD * 2;
-  const stepX = innerW / (points.length - 1);
-  const coords = points.map((p, i) => ({
-    x: PAD + i * stepX,
-    y: PAD + innerH * (1 - p.score),
-    ...p,
-  }));
-  const path = coords
-    .map((c, i) => `${i === 0 ? "M" : "L"}${c.x.toFixed(1)},${c.y.toFixed(1)}`)
-    .join(" ");
   return (
-    <svg
-      viewBox={`0 0 ${WIDTH} ${HEIGHT}`}
-      className="chart"
-      role="img"
-      aria-label={`Quiz score trend across ${points.length} attempts, from ${Math.round(points[0].score * 100)}% to ${Math.round(points[points.length - 1].score * 100)}%`}
-    >
-      {[0, 0.5, 1].map((frac) => (
-        <line
-          key={frac}
-          x1={PAD}
-          x2={WIDTH - PAD}
-          y1={PAD + innerH * (1 - frac)}
-          y2={PAD + innerH * (1 - frac)}
-          className="chart-gridline"
-        />
-      ))}
-      <line
-        x1={PAD}
-        x2={WIDTH - PAD}
-        y1={PAD + innerH * 0.3}
-        y2={PAD + innerH * 0.3}
-        className="chart-threshold"
-        strokeDasharray="4 4"
-      />
-      <path d={path} className="chart-line" fill="none" />
-      {coords.map((c, i) => (
-        <circle key={i} cx={c.x} cy={c.y} r={3.5} className="chart-point" />
-      ))}
-    </svg>
+    <HistoryChart
+      kind="score"
+      points={points.map((p) => ({ date: p.date, value: p.score * 100 }))}
+    />
   );
 }
-
 export function TimeSpentChart({
   points,
 }: {
   points: { date: string; minutes: number }[];
 }) {
-  if (!points.length) {
-    return (
-      <p className="muted">
-        Complete a lesson and save feedback to see time spent here.
-      </p>
-    );
-  }
-  const innerW = WIDTH - PAD * 2;
-  const innerH = HEIGHT - PAD * 2;
-  const max = Math.max(...points.map((p) => p.minutes), 1);
-  const barW = innerW / points.length;
   return (
-    <svg
-      viewBox={`0 0 ${WIDTH} ${HEIGHT}`}
-      className="chart"
-      role="img"
-      aria-label={`Minutes spent per day over the last ${points.length} days`}
-    >
-      {points.map((p, i) => {
-        const h = (p.minutes / max) * innerH;
-        return (
-          <g key={p.date}>
-            <rect
-              x={PAD + i * barW + barW * 0.15}
-              y={PAD + innerH - h}
-              width={barW * 0.7}
-              height={h}
-              rx={3}
-              className="chart-bar"
-            />
-            <text
-              x={PAD + i * barW + barW / 2}
-              y={HEIGHT - 6}
-              textAnchor="middle"
-              className="chart-axis-label"
-            >
-              {new Date(p.date).toLocaleDateString(undefined, { weekday: "narrow" })}
-            </text>
-          </g>
-        );
-      })}
-    </svg>
+    <HistoryChart
+      kind="time"
+      points={points.map((p) => ({ date: p.date, value: p.minutes }))}
+    />
   );
 }
