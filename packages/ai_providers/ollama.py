@@ -19,7 +19,7 @@ from packages.ai_providers.base import (
     ProviderHealth,
     StructuredResult,
 )
-from packages.ai_providers.openai_compatible import _validate_json
+from packages.ai_providers.openai_compatible import _upstream_error, _validate_json
 
 DEFAULT_TIMEOUT = 300.0
 
@@ -50,7 +50,7 @@ class OllamaProvider(AIProvider):
         async with httpx.AsyncClient(timeout=DEFAULT_TIMEOUT) as client:
             resp = await client.post(f"{self.base_url}/api/chat", json=payload)
         if resp.status_code >= 400:
-            raise AIProviderError(f"ollama error {resp.status_code}: {resp.text[:500]}")
+            raise _upstream_error("ollama error", resp)
         data = resp.json()
         text = data.get("message", {}).get("content", "")
         return GenerationResult(text=text, raw_response=data, model=self.chat_model)

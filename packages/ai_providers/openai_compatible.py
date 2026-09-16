@@ -7,6 +7,7 @@ slightly (messages endpoint, no /chat/completions), so it gets its own thin subc
 from __future__ import annotations
 
 import json
+import logging
 from typing import Any
 
 import httpx
@@ -21,7 +22,19 @@ from packages.ai_providers.base import (
     StructuredResult,
 )
 
+logger = logging.getLogger(__name__)
+
 DEFAULT_TIMEOUT = 60.0
+
+
+def _upstream_error(prefix: str, resp) -> AIProviderError:
+    """Log the upstream body for the operator, but keep it out of the raised
+    message. That message reaches job.error_summary and credential
+    validation_detail, both readable over the API -- echoing an arbitrary
+    upstream response there turns a provider misconfiguration into a read
+    primitive against whatever the base_url pointed at."""
+    logger.warning("%s %s: %s", prefix, resp.status_code, resp.text[:500])
+    return AIProviderError(f"{prefix} {resp.status_code}")
 
 
 class OpenAICompatibleProvider(AIProvider):
@@ -57,7 +70,7 @@ class OpenAICompatibleProvider(AIProvider):
                 f"{self.base_url}/chat/completions", headers=self._headers(), json=payload
             )
         if resp.status_code >= 400:
-            raise AIProviderError(f"provider error {resp.status_code}: {resp.text[:500]}")
+            raise _upstream_error("provider error", resp)
         data = resp.json()
         text = data["choices"][0]["message"]["content"]
         return GenerationResult(text=text, raw_response=data, model=self.chat_model)
@@ -85,7 +98,7 @@ class OpenAICompatibleProvider(AIProvider):
                 f"{self.base_url}/embeddings", headers=self._headers(), json=payload
             )
         if resp.status_code >= 400:
-            raise AIProviderError(f"provider error {resp.status_code}: {resp.text[:500]}")
+            raise _upstream_error("provider error", resp)
         data = resp.json()
         return [item["embedding"] for item in data["data"]]
 
@@ -128,7 +141,7 @@ class AnthropicProvider(AIProvider):
                 f"{self.base_url}/messages", headers=self._headers(), json=payload
             )
         if resp.status_code >= 400:
-            raise AIProviderError(f"provider error {resp.status_code}: {resp.text[:500]}")
+            raise _upstream_error("provider error", resp)
         data = resp.json()
         text = "".join(block.get("text", "") for block in data.get("content", []))
         return GenerationResult(text=text, raw_response=data, model=self.chat_model)

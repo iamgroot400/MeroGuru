@@ -12,6 +12,7 @@ from app.schemas.credential import CredentialCreate, CredentialOut, CredentialTe
 from app.services.credential_service import create_credential, get_provider_for
 from packages.connectors.youtube import YouTubeConnector
 from app.core.crypto import decrypt_secret
+from packages.ai_providers.url_guard import ProviderUrlError
 
 router = APIRouter(prefix="/credentials", tags=["credentials"])
 
@@ -23,7 +24,10 @@ def list_credentials(db: Session = Depends(get_db)) -> list[ProviderCredential]:
 
 @router.post("", response_model=CredentialOut, status_code=201)
 def add_credential(payload: CredentialCreate, db: Session = Depends(get_db)) -> ProviderCredential:
-    return create_credential(db, payload)
+    try:
+        return create_credential(db, payload)
+    except ProviderUrlError as exc:
+        raise HTTPException(422, str(exc)) from exc
 
 
 @router.post("/{credential_id}/test", response_model=CredentialTestResult)

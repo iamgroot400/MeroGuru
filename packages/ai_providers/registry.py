@@ -9,6 +9,7 @@ from __future__ import annotations
 from packages.ai_providers.base import AIProvider
 from packages.ai_providers.ollama import OllamaProvider
 from packages.ai_providers.openai_compatible import AnthropicProvider, OpenAICompatibleProvider
+from packages.ai_providers.url_guard import validate_provider_url
 
 SUPPORTED_PROVIDERS = {"openai", "anthropic", "groq", "openai_compatible", "ollama"}
 
@@ -20,6 +21,10 @@ def build_provider(
     chat_model: str | None = None,
     embedding_model: str | None = None,
 ) -> AIProvider:
+    # Only caller-supplied URLs are screened; the hardcoded vendor defaults
+    # below are trusted and skipping them avoids a DNS lookup per build.
+    if base_url is not None:
+        base_url = validate_provider_url(base_url, provider=provider)
     if provider == "openai":
         if not api_key:
             raise ValueError("openai provider requires an api_key")

@@ -111,7 +111,7 @@ class YouTubeConnector(LearningSourceConnector):
                     params={"key": self.api_key, "q": "test", "part": "id", "maxResults": 1},
                 )
             if resp.status_code >= 400:
-                return ConnectorHealth(ok=False, detail=f"status {resp.status_code}: {resp.text[:200]}")
+                return ConnectorHealth(ok=False, detail=f"status {resp.status_code}")
             return ConnectorHealth(ok=True)
         except httpx.HTTPError as exc:
             return ConnectorHealth(ok=False, detail=str(exc))

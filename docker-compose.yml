@@ -4,12 +4,12 @@ services:
     restart: unless-stopped
     environment:
       POSTGRES_USER: meroguru
-      POSTGRES_PASSWORD: change-me
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change-me}
       POSTGRES_DB: meroguru
     volumes:
       - postgres_data:/var/lib/postgresql/data
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U meroguru"]
       interval: 5s
@@ -20,7 +20,7 @@ services:
     image: redis:7-alpine
     restart: unless-stopped
     ports:
-      - "6379:6379"
+      - "127.0.0.1:6379:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -33,7 +33,7 @@ services:
     volumes:
       - ollama_data:/root/.ollama
     ports:
-      - "11434:11434"
+      - "127.0.0.1:11434:11434"
 
   brain:
     build:
@@ -42,7 +42,7 @@ services:
     restart: unless-stopped
     env_file: .env
     ports:
-      - "8100:8100"
+      - "127.0.0.1:8100:8100"
     volumes:
       - ./apps/brain:/app/apps/brain
       - ./packages:/app/packages
@@ -56,7 +56,7 @@ services:
     restart: unless-stopped
     env_file: .env
     environment:
-      DATABASE_URL: postgresql+psycopg://meroguru:change-me@postgres:5432/meroguru
+      DATABASE_URL: postgresql+psycopg://meroguru:${POSTGRES_PASSWORD:-change-me}@postgres:5432/meroguru
       REDIS_URL: redis://redis:6379/0
       BRAIN_BASE_URL: http://brain:8100
     depends_on:
@@ -67,7 +67,7 @@ services:
       brain:
         condition: service_started
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
     volumes:
       - ./apps/api:/app/apps/api
       - ./packages:/app/packages
@@ -81,7 +81,7 @@ services:
     restart: unless-stopped
     env_file: .env
     environment:
-      DATABASE_URL: postgresql+psycopg://meroguru:change-me@postgres:5432/meroguru
+      DATABASE_URL: postgresql+psycopg://meroguru:${POSTGRES_PASSWORD:-change-me}@postgres:5432/meroguru
       REDIS_URL: redis://redis:6379/0
       BRAIN_BASE_URL: http://brain:8100
     depends_on:
@@ -104,7 +104,7 @@ services:
     environment:
       VITE_API_BASE_URL: http://localhost:8000
     ports:
-      - "3000:3000"
+      - "127.0.0.1:3000:3000"
     volumes:
       - ./apps/web:/app
       - /app/node_modules

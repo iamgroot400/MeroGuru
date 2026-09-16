@@ -9,12 +9,19 @@ from app.models.credential import ProviderCredential
 from app.schemas.credential import CredentialCreate
 from packages.ai_providers.base import AIProvider
 from packages.ai_providers.registry import build_provider
+from packages.ai_providers.url_guard import validate_provider_url
 
 
 AI_PROVIDERS = {"openai", "anthropic", "groq", "openai_compatible", "ollama"}
 
 
 def create_credential(db: Session, payload: CredentialCreate) -> ProviderCredential:
+    # Screen the URL here as well as in build_provider: this rejects a hostile
+    # base_url at the API boundary instead of storing it and only refusing it
+    # later, when a background job tries to use it.
+    if payload.base_url:
+        validate_provider_url(payload.base_url, provider=payload.provider)
+
     if payload.provider in AI_PROVIDERS:
         db.query(ProviderCredential).filter(
             ProviderCredential.provider.in_(AI_PROVIDERS)

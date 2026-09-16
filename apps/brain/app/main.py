@@ -13,16 +13,40 @@ Two responsibilities live here:
 """
 from __future__ import annotations
 
-from fastapi import FastAPI, HTTPException
+import os
+import secrets
+
+from fastapi import Depends, FastAPI, Header, HTTPException
 
 from app.schemas import AdaptRequest, AdaptResponse, AnalyticsRequest, AnalyticsResponse
 from packages.ai_providers.base import AIProviderError
 from packages.ai_providers.registry import build_provider
+from packages.ai_providers.url_guard import ProviderUrlError
 from packages.learning_engine.adaptation.apply import run_adaptation
 from packages.learning_engine.adaptation.signals import AssessmentEvent
 from packages.learning_engine.analytics import RawEvent, compute_analytics
 
 app = FastAPI(title="MeroGuru Brain", version="0.1.0")
+
+BRAIN_AUTH_HEADER = "X-Brain-Auth"
+
+
+def require_brain_auth(x_brain_auth: str | None = Header(default=None)) -> None:
+    """The adapt endpoint performs outbound HTTP on behalf of its caller, using
+    a base_url and api_key taken from the request body. Anything able to reach
+    this port could otherwise use the service as an SSRF proxy with an
+    attacker-chosen Authorization header, so the orchestrator must prove it is
+    the orchestrator. Fails closed: an unset secret refuses every request
+    rather than silently reverting to open access."""
+    expected = os.environ.get("BRAIN_SHARED_SECRET", "")
+    if not expected:
+        raise HTTPException(
+            503,
+            "brain service is not configured: set BRAIN_SHARED_SECRET on both the "
+            "brain and the api/worker services",
+        )
+    if not x_brain_auth or not secrets.compare_digest(x_brain_auth, expected):
+        raise HTTPException(401, "invalid or missing brain credentials")
 
 
 @app.get("/health/live")
@@ -42,7 +66,9 @@ def _to_assessment_event(concept_id: str, e) -> AssessmentEvent:
 
 
 @app.post("/brain/v1/adapt", response_model=AdaptResponse)
-async def adapt(payload: AdaptRequest) -> AdaptResponse:
+async def adapt(
+    payload: AdaptRequest, _: None = Depends(require_brain_auth)
+) -> AdaptResponse:
     try:
         provider = build_provider(
             provider=payload.provider.provider,
@@ -51,6 +77,8 @@ async def adapt(payload: AdaptRequest) -> AdaptResponse:
             chat_model=payload.provider.chat_model,
             embedding_model=payload.provider.embedding_model,
         )
+    except ProviderUrlError as exc:
+        raise HTTPException(422, f"provider base_url refused: {exc}") from exc
     except (ValueError, AIProviderError) as exc:
         raise HTTPException(422, f"could not build AI provider: {exc}") from exc
 
@@ -73,7 +101,9 @@ async def adapt(payload: AdaptRequest) -> AdaptResponse:
 
 
 @app.post("/brain/v1/analytics", response_model=AnalyticsResponse)
-def analytics(payload: AnalyticsRequest) -> AnalyticsResponse:
+def analytics(
+    payload: AnalyticsRequest, _: None = Depends(require_brain_auth)
+) -> AnalyticsResponse:
     raw = [RawEvent(event_type=e.event_type, event_data=e.event_data, created_at=e.created_at) for e in payload.events]
     result = compute_analytics(raw)
     return AnalyticsResponse(**result)

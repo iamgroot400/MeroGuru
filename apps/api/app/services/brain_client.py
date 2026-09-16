@@ -8,6 +8,13 @@ from app.core.config import settings
 from packages.learning_engine.adaptation.signals import AssessmentEvent
 
 
+def _auth_headers() -> dict[str, str]:
+    """The brain refuses unauthenticated calls; it performs outbound requests
+    using the provider config in the body, so it must not serve anything that
+    merely reaches its port."""
+    return {"X-Brain-Auth": settings.brain_shared_secret}
+
+
 def _event_to_json(e: AssessmentEvent) -> dict:
     return {
         "score": e.score,
@@ -39,7 +46,7 @@ async def adapt(
         "provider": provider_config,
     }
     async with httpx.AsyncClient(base_url=settings.brain_base_url, timeout=60.0) as client:
-        response = await client.post("/brain/v1/adapt", json=payload)
+        response = await client.post("/brain/v1/adapt", json=payload, headers=_auth_headers())
         response.raise_for_status()
         return response.json()
 
@@ -59,6 +66,6 @@ async def analytics(events: list[dict]) -> dict:
         ]
     }
     async with httpx.AsyncClient(base_url=settings.brain_base_url, timeout=30.0) as client:
-        response = await client.post("/brain/v1/analytics", json=payload)
+        response = await client.post("/brain/v1/analytics", json=payload, headers=_auth_headers())
         response.raise_for_status()
         return response.json()
