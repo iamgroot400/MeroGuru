@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import date
 from uuid import UUID
@@ -26,6 +27,21 @@ logger = logging.getLogger(__name__)
 
 class PlanGenerationError(RuntimeError):
     pass
+
+
+async def _search_lesson_resources(youtube, mediawiki, concept_query: str) -> list:
+    async def search(connector, max_results):
+        try:
+            return await connector.search(SearchRequest(query=concept_query, max_results=max_results))
+        except Exception as exc:
+            logger.warning("%s search failed for concept %s: %s", connector.provider, concept_query, exc)
+            return []
+
+    searches = [search(mediawiki, 3)]
+    if youtube is not None:
+        searches.insert(0, search(youtube, 5))
+    results = await asyncio.gather(*searches)
+    return [candidate for candidates in results for candidate in candidates]
 
 
 async def generate_roadmap_and_plan(db: Session, goal_id: UUID) -> LearningPlan:
@@ -124,7 +140,15 @@ async def generate_roadmap_and_plan(db: Session, goal_id: UUID) -> LearningPlan:
             ),
             max_tokens=3500,
         )
-        content = await provider.generate_structured(content_request, LESSON_CONTENT_SCHEMA)
+        # External searches do not depend on the generated content. Overlap them
+        # with inference without issuing competing LLM requests on a small GPU.
+        async with asyncio.TaskGroup() as tasks:
+            content_task = tasks.create_task(provider.generate_structured(content_request, LESSON_CONTENT_SCHEMA))
+            resources_task = tasks.create_task(
+                _search_lesson_resources(youtube, mediawiki, lesson_concepts[0].title)
+            )
+        content = content_task.result()
+        all_candidates = resources_task.result()
 
         seq = 0
         if content.valid:
@@ -162,24 +186,6 @@ async def generate_roadmap_and_plan(db: Session, goal_id: UUID) -> LearningPlan:
             seq += 1
 
         primary_resource: Resource | None = None
-        all_candidates: list = []
-        concept_query = lesson_concepts[0].title
-
-        if youtube is not None:
-            try:
-                all_candidates.extend(
-                    await youtube.search(SearchRequest(query=concept_query, max_results=5))
-                )
-            except Exception as exc:  # connector failure must not block plan generation
-                logger.warning("youtube search failed for concept %s: %s", concept_query, exc)
-
-        try:
-            all_candidates.extend(
-                await mediawiki.search(SearchRequest(query=concept_query, max_results=3))
-            )
-        except Exception as exc:
-            logger.warning("mediawiki search failed for concept %s: %s", concept_query, exc)
-
         best = select_best_resource(all_candidates, lesson_concepts[0], language="en")
         if best is not None:
             candidate, resource_score = best

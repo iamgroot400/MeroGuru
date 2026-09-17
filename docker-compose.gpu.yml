@@ -1,0 +1,11 @@
+# Optional NVIDIA override; requires Docker Desktop WSL2 GPU support.
+# docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d
+services:
+  ollama:
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]

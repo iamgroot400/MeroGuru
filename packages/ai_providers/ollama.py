@@ -6,10 +6,10 @@ should still get working roadmap generation via a local Ollama model.
 from __future__ import annotations
 
 import json
+import logging
 from typing import Any
 
 import httpx
-import jsonschema
 
 from packages.ai_providers.base import (
     AIProvider,
@@ -22,6 +22,7 @@ from packages.ai_providers.base import (
 from packages.ai_providers.openai_compatible import _validate_json
 
 DEFAULT_TIMEOUT = 300.0
+logger = logging.getLogger(__name__)
 
 
 class OllamaProvider(AIProvider):
@@ -38,6 +39,11 @@ class OllamaProvider(AIProvider):
         self.embedding_model = embedding_model
 
     async def generate_text(self, request: GenerationRequest) -> GenerationResult:
+        return await self._chat(request)
+
+    async def _chat(
+        self, request: GenerationRequest, json_schema: dict[str, Any] | None = None
+    ) -> GenerationResult:
         payload = {
             "model": self.chat_model,
             "messages": [
@@ -45,13 +51,26 @@ class OllamaProvider(AIProvider):
                 {"role": "user", "content": request.user_prompt},
             ],
             "stream": False,
-            "options": {"temperature": request.temperature},
+            "keep_alive": "15m",
+            "options": {"temperature": request.temperature, "num_predict": request.max_tokens},
         }
+        if json_schema is not None:
+            payload["format"] = json_schema
         async with httpx.AsyncClient(timeout=DEFAULT_TIMEOUT) as client:
             resp = await client.post(f"{self.base_url}/api/chat", json=payload)
         if resp.status_code >= 400:
             raise AIProviderError(f"ollama error {resp.status_code}: {resp.text[:500]}")
         data = resp.json()
+        eval_seconds = (data.get("eval_duration") or 0) / 1e9
+        logger.info(
+            "ollama model=%s total_s=%.2f load_s=%.2f prompt_s=%.2f output_tokens=%s tokens_per_s=%.2f",
+            self.chat_model,
+            (data.get("total_duration") or 0) / 1e9,
+            (data.get("load_duration") or 0) / 1e9,
+            (data.get("prompt_eval_duration") or 0) / 1e9,
+            data.get("eval_count", 0),
+            (data.get("eval_count") or 0) / eval_seconds if eval_seconds else 0,
+        )
         text = data.get("message", {}).get("content", "")
         return GenerationResult(text=text, raw_response=data, model=self.chat_model)
 
@@ -68,7 +87,7 @@ class OllamaProvider(AIProvider):
             temperature=request.temperature,
             max_tokens=request.max_tokens,
         )
-        result = await self.generate_text(augmented)
+        result = await self._chat(augmented, json_schema)
         return _validate_json(result.text, json_schema, result.raw_response)
 
     async def embed(self, texts: list[str]) -> list[list[float]]:
